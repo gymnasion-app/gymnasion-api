@@ -115,4 +115,48 @@ class SecurityFilterTest {
         assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal()).isEqualTo(usuarioAluno);
         verify(filterChain).doFilter(request, response);
     }
+
+    @Test
+    @DisplayName("US02: Aluno sem registro de Aluno associado é rejeitado com 401")
+    void alunoSemRegistro_rejeitadoImediatamente() throws ServletException, IOException {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("Authorization", "Bearer valid.token.jwt");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        when(tokenService.validateToken("valid.token.jwt")).thenReturn("aluno@teste.com");
+        when(usuarioRepository.findByEmail("aluno@teste.com")).thenReturn(Optional.of(usuarioAluno));
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.empty());
+
+        securityFilter.doFilterInternal(request, response, filterChain);
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(response.getContentAsString()).contains("Acesso restrito a alunos com cadastro ativo.");
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        verify(filterChain, never()).doFilter(any(), any());
+    }
+
+    @Test
+    @DisplayName("US02: Aluno com status PENDENTE é rejeitado com 401")
+    void alunoPendente_rejeitadoImediatamente() throws ServletException, IOException {
+        Aluno alunoPendente = Aluno.builder()
+                .id(UUID.randomUUID())
+                .usuario(usuarioAluno)
+                .status(StatusConvite.PENDENTE)
+                .build();
+
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("Authorization", "Bearer valid.token.jwt");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        when(tokenService.validateToken("valid.token.jwt")).thenReturn("aluno@teste.com");
+        when(usuarioRepository.findByEmail("aluno@teste.com")).thenReturn(Optional.of(usuarioAluno));
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(alunoPendente));
+
+        securityFilter.doFilterInternal(request, response, filterChain);
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(response.getContentAsString()).contains("Acesso restrito a alunos com cadastro ativo.");
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        verify(filterChain, never()).doFilter(any(), any());
+    }
 }

@@ -12,6 +12,8 @@ import com.gymnasion.tcc.exceptions.BusinessException;
 import com.gymnasion.tcc.exceptions.NotFoundException;
 import com.gymnasion.tcc.repository.AlunoRepository;
 import com.gymnasion.tcc.repository.PersonalTrainerRepository;
+import com.gymnasion.tcc.repository.TermoAceiteRepository;
+import com.gymnasion.tcc.repository.UsuarioRepository;
 import com.gymnasion.tcc.event.SolicitacaoAlunoAvaliadaEvent;
 import lombok.AllArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
@@ -32,6 +34,8 @@ public class AlunoService {
 
     private final AlunoRepository alunoRepository;
     private final PersonalTrainerRepository personalTrainerRepository;
+    private final UsuarioRepository usuarioRepository;
+    private final TermoAceiteRepository termoAceiteRepository;
     private final NotificacaoService notificacaoService;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -180,9 +184,16 @@ public class AlunoService {
         String emailAluno = aluno.getUsuario().getEmail();
         String nomeAluno = aluno.getUsuario().getNome();
         String nomePersonal = personalTrainer.getUsuario().getNome();
+        Usuario usuarioAluno = aluno.getUsuario();
 
         alunoRepository.delete(aluno);
         alunoRepository.flush();
+
+        if (usuarioAluno != null) {
+            termoAceiteRepository.deleteByUsuario(usuarioAluno);
+            usuarioRepository.delete(usuarioAluno);
+            usuarioRepository.flush();
+        }
 
         // Personal: solicitação tratada -> marca "Nova solicitação" como lida / remove lembrete se zerou
         notificacaoService.resolverSolicitacao(personalTrainer, alunoId, semAlunosPendentes(personalTrainer));

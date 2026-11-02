@@ -50,16 +50,17 @@ public class AuthService {
         // RN-014: Manutenção e restrição de alunos inativos: perdem login imediatamente
         if (user.getRole() == Role.ALUNO) {
             Aluno aluno = alunoRepository.findByUsuario(user).orElse(null);
-            if (aluno != null) {
-                if (aluno.getStatus() == StatusConvite.INATIVO) {
-                    throw new BusinessException("Erro. Este aluno está inativo.");
-                }
-                if (aluno.getStatus() == StatusConvite.PENDENTE) {
-                    throw new BusinessException("Aguardando a aprovação do personal trainer para liberar o acesso.");
-                }
-                if (aluno.getStatus() == StatusConvite.RECUSADO) {
-                    throw new BusinessException("Cadastro recusado pelo personal trainer.");
-                }
+            if (aluno == null) {
+                throw new BusinessException("Cadastro de aluno não localizado ou revogado.");
+            }
+            if (aluno.getStatus() == StatusConvite.INATIVO) {
+                throw new BusinessException("Erro. Este aluno está inativo.");
+            }
+            if (aluno.getStatus() == StatusConvite.PENDENTE) {
+                throw new BusinessException("Aguardando a aprovação do personal trainer para liberar o acesso.");
+            }
+            if (aluno.getStatus() == StatusConvite.RECUSADO) {
+                throw new BusinessException("Cadastro recusado pelo personal trainer.");
             }
         }
 

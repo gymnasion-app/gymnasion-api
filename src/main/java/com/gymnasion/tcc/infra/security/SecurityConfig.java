@@ -1,12 +1,13 @@
 package com.gymnasion.tcc.infra.security;
 
-import jakarta.servlet.Filter;
 import lombok.AllArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -20,15 +21,22 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.Arrays;
 
 @Configuration
-@AllArgsConstructor
+@EnableMethodSecurity
 public class SecurityConfig {
 
     private final SecurityFilter securityFilter;
 
+    @Value("app.frontend.url")
+    private String frontendUrl;
+
+    public SecurityConfig(SecurityFilter securityFilter) {
+        this.securityFilter = securityFilter;
+    }
+
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(Arrays.asList("http://localhost:5173"));
+        configuration.setAllowedOrigins(Arrays.asList(frontendUrl));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         configuration.setAllowedHeaders(Arrays.asList("Content-Type", "Authorization"));
         configuration.setAllowCredentials(true);
@@ -49,6 +57,7 @@ public class SecurityConfig {
                         .requestMatchers("/personal-trainers/**").hasRole("PERSONAL_TRAINER")
                         .requestMatchers("/alunos/**").hasRole("ALUNO")
                         .requestMatchers(HttpMethod.GET, "/modalidades/**").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/modalidades/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(securityFilter, UsernamePasswordAuthenticationFilter.class)
