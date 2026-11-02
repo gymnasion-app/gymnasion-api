@@ -96,6 +96,31 @@ class LoginAttemptServiceTest {
         assertThat(loginAttemptService.isBlocked("user@teste.com")).isFalse();
     }
 
+    @Test
+    @DisplayName("RN-010: Expurgo periódico limpa registros com bloqueio ou inatividade expirados")
+    void expurgarTentativasExpiradas_limpaEntradasExpiradas() {
+        // Usuário 1: bloqueado após 5 falhas
+        for (int i = 0; i < 5; i++) loginAttemptService.loginFailed("bloqueado@teste.com");
+        // Usuário 2: apenas 2 falhas parciais
+        loginAttemptService.loginFailed("parcial@teste.com");
+        loginAttemptService.loginFailed("parcial@teste.com");
+        // Usuário 3: falha recente que ainda não expirará
+        mutableClock.plus(Duration.ofMinutes(4));
+        loginAttemptService.loginFailed("recente@teste.com");
+
+        // Avança mais 2 minutos (total 6 minutos para os primeiros)
+        mutableClock.plus(Duration.ofMinutes(2));
+        loginAttemptService.expurgarTentativasExpiradas();
+
+        // Usuário 1 e 2 expiraram e foram removidos
+        assertThat(loginAttemptService.getTentativas("bloqueado@teste.com")).isZero();
+        assertThat(loginAttemptService.isBlocked("bloqueado@teste.com")).isFalse();
+        assertThat(loginAttemptService.getTentativas("parcial@teste.com")).isZero();
+
+        // Usuário 3 ainda está dentro da janela de 5 minutos da sua última tentativa
+        assertThat(loginAttemptService.getTentativas("recente@teste.com")).isEqualTo(1);
+    }
+
     private static class MutableClock extends Clock {
         private Instant currentInstant;
         private final ZoneId zone = ZoneId.of("UTC");

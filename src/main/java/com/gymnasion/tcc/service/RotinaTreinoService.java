@@ -38,6 +38,21 @@ public class RotinaTreinoService {
     private final DesempenhoRepository desempenhoRepository;
     private final AcompanhamentoTreinoService acompanhamentoTreinoService;
     private final NotificacaoService notificacaoService;
+
+    private static final java.time.ZoneId ZONE_BRASIL = java.time.ZoneId.of("America/Sao_Paulo");
+
+    /**
+     * US-21 C2: Impede que alunos acessem o formulário ou registrem sessões pertencentes a semanas futuras.
+     */
+    private void validarSessaoNaoPertenceASemanaFutura(SessaoTreino sessao) {
+        if (sessao.getDataPlanejada() != null) {
+            LocalDate hoje = LocalDate.now(ZONE_BRASIL);
+            LocalDate fimSemanaAtual = hoje.with(java.time.temporal.TemporalAdjusters.nextOrSame(java.time.DayOfWeek.SUNDAY));
+            if (sessao.getDataPlanejada().isAfter(fimSemanaAtual)) {
+                throw new BusinessException("Sessões de semanas futuras não estão disponíveis para execução.");
+            }
+        }
+    }
     private final AuditoriaDesempenhoRepository auditoriaDesempenhoRepository;
     private final TurmaRepository turmaRepository;
 
@@ -544,6 +559,13 @@ public class RotinaTreinoService {
         String objetivos = objetivosPersonalizados != null ? objetivosPersonalizados : rotinaOrigem.getObjetivos();
 
         // US-25 C3 / C5 / C9: Nova rotina como cópia independente, vinculada ao aluno, ativa
+        // RN-017 / US-19 C3: Copia apenas métricas ativas da rotina de origem
+        Set<Metrica> metricasAtivas = (rotinaOrigem.getMetricas() != null)
+                ? rotinaOrigem.getMetricas().stream()
+                        .filter(m -> Boolean.TRUE.equals(m.getAtivo()))
+                        .collect(Collectors.toSet())
+                : new HashSet<>();
+
         RotinaTreino novaRotina = RotinaTreino.builder()
                 .titulo(titulo)
                 .modalidade(rotinaOrigem.getModalidade())
@@ -552,7 +574,7 @@ public class RotinaTreinoService {
                 .personalTrainer(personal)
                 .ativo(true)
                 .alunos(new HashSet<>(Set.of(aluno)))
-                .metricas(new HashSet<>(rotinaOrigem.getMetricas()))
+                .metricas(metricasAtivas)
                 .sessoes(new ArrayList<>())
                 .build();
 
@@ -774,6 +796,9 @@ public class RotinaTreinoService {
         SessaoTreino sessao = sessaoTreinoRepository.findByIdAndAlunoId(sessaoId, aluno.getId())
                 .orElseThrow(() -> new NotFoundException("Sessão de treino não encontrada para este aluno."));
 
+        // US-21 C2: Aluno não acessa formulário de sessão de semanas futuras
+        validarSessaoNaoPertenceASemanaFutura(sessao);
+
         // US-22 Cenário 1: Disponibiliza as métricas configuradas pelo personal (descontinuadas não aparecem - US-19 C3)
         List<RotinaTreinoResponseDTO.MetricaResumoDTO> metricasDTO = sessao.getRotinaTreino().getMetricas().stream()
                 .filter(metrica -> Boolean.TRUE.equals(metrica.getAtivo()))
@@ -848,6 +873,9 @@ public class RotinaTreinoService {
 
             sessao = sessaoTreinoRepository.findByIdAndAlunoId(sessaoId, alunoResponsavel.getId())
                     .orElseThrow(() -> new NotFoundException("Sessão de treino não encontrada para este aluno."));
+
+            // US-21 C2: Aluno não registra execução de sessão de semanas futuras
+            validarSessaoNaoPertenceASemanaFutura(sessao);
 
             // US-22 Cenário 8: Após a confirmação, o registro não pode ser alterado pelo aluno (correções via US-23)
             if (execucaoConfirmada(sessao)) {

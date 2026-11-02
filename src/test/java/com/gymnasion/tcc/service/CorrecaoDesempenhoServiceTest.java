@@ -451,6 +451,11 @@ class CorrecaoDesempenhoServiceTest {
             assertThat(item.valorNovo()).isEqualTo("00:31");
             assertThat(item.nomeUsuario()).isEqualTo("Treinador Carlos");
             assertThat(item.dataHora()).isEqualTo(quando);
+            assertThat(item.responsavelRole()).isEqualTo("ROLE_PERSONAL_TRAINER");
+            assertThat(item.metricaTitulo()).isEqualTo("Tempo 50m");
+            assertThat(item.tipoAlteracao()).isEqualTo("CORRECAO");
+            assertThat(item.responsavelNome()).isEqualTo("Treinador Carlos");
+            assertThat(item.dataHoraAlteracao()).isEqualTo(quando);
         });
     }
 }

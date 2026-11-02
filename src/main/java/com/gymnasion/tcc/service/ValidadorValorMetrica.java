@@ -11,8 +11,8 @@ import java.util.regex.Pattern;
  */
 public final class ValidadorValorMetrica {
 
-    // US-18 notas técnicas: "Tempo" valida formato mm:ss (segundos de 00 a 59)
-    private static final Pattern FORMATO_TEMPO = Pattern.compile("^\\d{2,}:[0-5]\\d$");
+    // US-18 / RN-015: "Tempo" valida formatos mm:ss ou hh:mm:ss (minutos e segundos de 00 a 59)
+    private static final Pattern FORMATO_TEMPO = Pattern.compile("^(?:\\d+:[0-5]\\d:[0-5]\\d|\\d{2,}:[0-5]\\d)$");
     // US-18 notas técnicas: "Frequência cardíaca" valida faixa numérica plausível (em bpm)
     private static final int FREQUENCIA_CARDIACA_MINIMA = 30;
     private static final int FREQUENCIA_CARDIACA_MAXIMA = 250;
@@ -47,7 +47,7 @@ public final class ValidadorValorMetrica {
             }
             case TEMPO -> FORMATO_TEMPO.matcher(valor).matches()
                     ? null
-                    : "Valor inválido para a métrica '" + titulo + "'. Verifique o formato esperado: deve estar no formato mm:ss.";
+                    : "Valor inválido para a métrica '" + titulo + "'. Verifique o formato esperado: deve estar no formato mm:ss ou hh:mm:ss.";
             case FREQUENCIA_CARDIACA -> {
                 try {
                     int bpm = Integer.parseInt(valor);

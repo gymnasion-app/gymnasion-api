@@ -2664,4 +2664,109 @@ class RotinaTreinoServiceTest {
         SessaoTreinoResponseDTO sessaoRetornada = resp.semanas().get(0).sessoes().get(0);
         assertThat(sessaoRetornada.desempenho()).isNull();
     }
+
+    @Test
+    @DisplayName("US25 / RN-017 / US-19 C3: Reutilização de rotina não copia métricas descontinuadas")
+    void US25_reutilizarRotina_ignoraMetricasDescontinuadas() {
+        Metrica metricaDescontinuada = Metrica.builder()
+                .id(UUID.randomUUID())
+                .titulo("Métrica Obsoleta")
+                .tipo(TipoMetrica.NUMERICO)
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .ativo(false)
+                .build();
+        rotinaTreino.getMetricas().add(metricaDescontinuada);
+
+        ReutilizarRotinaRequestDTO dto = new ReutilizarRotinaRequestDTO(
+                aluno.getId(), LocalDate.of(2026, 11, 2), null, null
+        );
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaTreino.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(rotinaTreino));
+        when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(aluno));
+        when(rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(aluno.getId(), modalidade.getId())).thenReturn(false);
+
+        org.mockito.ArgumentCaptor<RotinaTreino> rotinaCaptor = org.mockito.ArgumentCaptor.forClass(RotinaTreino.class);
+        when(rotinaTreinoRepository.save(rotinaCaptor.capture())).thenAnswer(i -> i.getArgument(0));
+
+        rotinaTreinoService.reutilizarRotina(usuarioPersonal, rotinaTreino.getId(), dto);
+
+        RotinaTreino salva = rotinaCaptor.getValue();
+        assertThat(salva.getMetricas())
+                .extracting(Metrica::getTitulo)
+                .contains("Tempo 50m", "Braçadas")
+                .doesNotContain("Métrica Obsoleta");
+    }
+
+    @Test
+    @DisplayName("US21 C2: Obter formulário de execução bloqueia sessão de semana futura para aluno")
+    void US21_obterFormulario_bloqueiaSessaoDeSemanaFuturaParaAluno() {
+        UUID sessaoId = UUID.randomUUID();
+        LocalDate dataSemanaFutura = LocalDate.now().plusWeeks(2);
+        SessaoTreino sessao = SessaoTreino.builder()
+                .id(sessaoId)
+                .rotinaTreino(rotinaTreino)
+                .dataPlanejada(dataSemanaFutura)
+                .build();
+
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(sessaoTreinoRepository.findByIdAndAlunoId(sessaoId, aluno.getId())).thenReturn(Optional.of(sessao));
+
+        assertThatThrownBy(() -> rotinaTreinoService.obterFormularioExecucao(usuarioAluno, sessaoId))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Sessões de semanas futuras não estão disponíveis para execução.");
+    }
+
+    @Test
+    @DisplayName("US21 C2: Registrar execução bloqueia sessão de semana futura para aluno")
+    void US21_registrarExecucao_bloqueiaSessaoDeSemanaFuturaParaAluno() {
+        UUID sessaoId = UUID.randomUUID();
+        LocalDate dataSemanaFutura = LocalDate.now().plusWeeks(2);
+        SessaoTreino sessao = SessaoTreino.builder()
+                .id(sessaoId)
+                .rotinaTreino(rotinaTreino)
+                .dataPlanejada(dataSemanaFutura)
+                .build();
+
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(sessaoTreinoRepository.findByIdAndAlunoId(sessaoId, aluno.getId())).thenReturn(Optional.of(sessao));
+
+        RegistrarExecucaoSessaoRequestDTO dto = new RegistrarExecucaoSessaoRequestDTO(
+                dataSemanaFutura, 60, 5, null, List.of()
+        );
+
+        assertThatThrownBy(() -> rotinaTreinoService.registrarExecucao(usuarioAluno, sessaoId, dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Sessões de semanas futuras não estão disponíveis para execução.");
+    }
+
+    @Test
+    @DisplayName("US10: Personal trainer pode registrar execução mesmo em data futura sem bloqueio")
+    void US10_registrarExecucao_personalPodeRegistrarSessaoDeSemanaFutura() {
+        UUID sessaoId = UUID.randomUUID();
+        LocalDate dataFutura = LocalDate.now().plusWeeks(2);
+        SessaoTreino sessao = SessaoTreino.builder()
+                .id(sessaoId)
+                .rotinaTreino(rotinaTreino)
+                .dataPlanejada(dataFutura)
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(sessaoTreinoRepository.findByIdAndPersonalTrainerId(sessaoId, personalTrainer.getId()))
+                .thenReturn(Optional.of(sessao));
+        when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(aluno));
+        when(metricaRepository.findById(metrica1.getId())).thenReturn(Optional.of(metrica1));
+        when(sessaoTreinoRepository.save(any(SessaoTreino.class))).thenAnswer(i -> i.getArgument(0));
+
+        RegistrarExecucaoSessaoRequestDTO dto = new RegistrarExecucaoSessaoRequestDTO(
+                dataFutura, 60, 5, aluno.getId(), List.of(new RegistrarResultadoMetricaDTO(metrica1.getId(), "00:30"))
+        );
+
+        SessaoTreinoResponseDTO response = rotinaTreinoService.registrarExecucao(usuarioPersonal, sessaoId, dto);
+        assertThat(response).isNotNull();
+    }
 }
