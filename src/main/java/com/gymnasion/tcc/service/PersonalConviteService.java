@@ -17,6 +17,8 @@ import lombok.Builder;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import com.gymnasion.tcc.event.ConviteAlunoCriadoEvent;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
@@ -40,7 +42,7 @@ public class PersonalConviteService {
     private final PasswordEncoder passwordEncoder;
     private final ModalidadeRepository modalidadeRepository;
     private final NotificacaoService notificacaoService;
-    private final EmailService emailService;
+    private final ApplicationEventPublisher eventPublisher;
     private final UsuarioService usuarioService;
     private final TermoAceiteRepository termoAceiteRepository;
 
@@ -74,7 +76,7 @@ public class PersonalConviteService {
         String emailEnviado = null;
         if (dto.emailAluno() != null && !dto.emailAluno().trim().isBlank()) {
             emailEnviado = dto.emailAluno().trim().toLowerCase();
-            emailService.enviarConviteAluno(emailEnviado, usuario.getNome(), modalidade.getNome(), fullUrl);
+            eventPublisher.publishEvent(new ConviteAlunoCriadoEvent(emailEnviado, usuario.getNome(), modalidade.getNome(), fullUrl));
         }
 
         return new ConviteResponseDTO(fullUrl, emailEnviado);
@@ -93,6 +95,14 @@ public class PersonalConviteService {
 
         PersonalTrainer personal = personalTrainerRepository.getById(convite.getPersonalId());
 
+        if (convite.getStatus() != StatusConvite.ATIVO || convite.getDataExpiracao().isBefore(LocalDateTime.now())) {
+            throw new BusinessException("O link do convite está expirado ou inativo.");
+        }
+
+        if (convite.getQuantidadesUsuarios() >= convite.getMaximoUsuarios()) {
+            throw new BusinessException("O limite de utilizações deste link de convite foi atingido.");
+        }
+
         String cpfLimpo = dto.cpf().replaceAll("\\D", "");
 
         if (usuarioRepository.findByEmail(dto.email().toLowerCase().trim()).isPresent()) {
@@ -103,19 +113,11 @@ public class PersonalConviteService {
             throw new DuplicateResourceException("Este CPF já está cadastrado no sistema.");
         }
 
-        if (convite.getStatus() != StatusConvite.ATIVO || convite.getDataExpiracao().isBefore(LocalDateTime.now())) {
-            throw new BusinessException("O link do convite está expirado ou inativo.");
-        }
-
-        if (convite.getQuantidadesUsuarios() >= convite.getMaximoUsuarios()) {
-            throw new BusinessException("O limite de utilizações deste link de convite foi atingido.");
-        }
-
         Usuario usuario = Usuario.builder()
-                .nome(dto.nome())
-                .email(dto.email())
+                .nome(dto.nome().trim())
+                .email(dto.email().toLowerCase().trim())
                 .senhaHash(passwordEncoder.encode(dto.password()))
-                .cpf(dto.cpf().replaceAll("\\D", ""))
+                .cpf(cpfLimpo)
                 .celular(dto.celular().replaceAll("\\D", ""))
                 .role(Role.ALUNO)
                 .build();
