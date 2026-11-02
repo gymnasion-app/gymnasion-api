@@ -278,6 +278,13 @@ public class RotinaTreinoService {
             throw new BusinessException("Não é possível vincular alunos a uma rotina de treino encerrada/inativa.");
         }
 
+        // US-25: Se a rotina já possuir sessões com execução/desempenho registrado, impede novos vínculos diretos
+        boolean possuiExecucao = rotina.getSessoes() != null && rotina.getSessoes().stream()
+                .anyMatch(s -> s.getDesempenho() != null || Boolean.TRUE.equals(s.getConcluidaAluno()) || s.getStatus() == StatusSessaoTreino.CONCLUIDA);
+        if (possuiExecucao) {
+            throw new BusinessException("Não é possível vincular novos alunos a uma rotina que já possui sessões executadas. Utilize a função de reutilizar rotina (cópia independente).");
+        }
+
         // US-11 Cenário 3: Nenhum aluno selecionado
         if (dto == null || dto.alunosIds() == null || dto.alunosIds().isEmpty()) {
             throw new BusinessException("É necessário selecionar pelo menos 1 (um) aluno.");
@@ -332,6 +339,13 @@ public class RotinaTreinoService {
 
         if (Boolean.FALSE.equals(rotina.getAtivo())) {
             throw new BusinessException("Não é possível vincular alunos a uma rotina de treino encerrada/inativa.");
+        }
+
+        // US-25: Se a rotina já possuir sessões com execução/desempenho registrado, impede novos vínculos diretos
+        boolean possuiExecucao = rotina.getSessoes() != null && rotina.getSessoes().stream()
+                .anyMatch(s -> s.getDesempenho() != null || Boolean.TRUE.equals(s.getConcluidaAluno()) || s.getStatus() == StatusSessaoTreino.CONCLUIDA);
+        if (possuiExecucao) {
+            throw new BusinessException("Não é possível vincular novos alunos a uma rotina que já possui sessões executadas. Utilize a função de reutilizar rotina (cópia independente).");
         }
 
         Turma turma = turmaRepository.findByIdAndPersonalId(turmaId, personal.getId())
@@ -636,6 +650,7 @@ public class RotinaTreinoService {
     @Transactional(readOnly = true)
     public PlanejamentoRotinaResponseDTO consultarPlanejamento(Usuario usuario, UUID rotinaId, LocalDate dataReferencia) {
         RotinaTreino rotina;
+        UUID alunoIdVisualizador = null;
         if (usuario.getRole() == Role.PERSONAL_TRAINER) {
             PersonalTrainer personal = obterPersonalLogado(usuario);
             rotina = rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaId, personal.getId())
@@ -643,6 +658,7 @@ public class RotinaTreinoService {
         } else {
             Aluno aluno = alunoRepository.findByUsuario(usuario)
                     .orElseThrow(() -> new NotFoundException("Aluno não encontrado."));
+            alunoIdVisualizador = aluno.getId();
             rotina = rotinaTreinoRepository.findById(rotinaId)
                     .filter(r -> r.getAlunos().contains(aluno))
                     .orElseThrow(() -> new NotFoundException("Rotina de treino não encontrada para este aluno."));
@@ -664,8 +680,9 @@ public class RotinaTreinoService {
                     .toList();
         }
 
+        final UUID filtroAlunoId = alunoIdVisualizador;
         Map<Integer, List<SessaoTreinoResponseDTO>> sessoesPorSemana = sessoes.stream()
-                .map(this::toSessaoResponseDTO)
+                .map(s -> toSessaoResponseDTO(s, filtroAlunoId))
                 .collect(Collectors.groupingBy(SessaoTreinoResponseDTO::semana, TreeMap::new, Collectors.toList()));
 
         List<PlanejamentoRotinaResponseDTO.SemanaPlanejamentoDTO> semanasDTO = sessoesPorSemana.entrySet().stream()
@@ -769,7 +786,7 @@ public class RotinaTreinoService {
 
         // US-22 Cenário 8: Sessão já confirmada é exibida apenas para consulta
         return new FormularioExecucaoResponseDTO(
-                toSessaoResponseDTO(sessao),
+                toSessaoResponseDTO(sessao, aluno.getId()),
                 !execucaoConfirmada(sessao),
                 metricasDTO
         );
@@ -799,6 +816,16 @@ public class RotinaTreinoService {
             // RN-014: Aluno inativo
             if (alunoResponsavel.getStatus() == StatusConvite.INATIVO) {
                 throw new BusinessException("Erro. Este aluno está inativo.");
+            }
+
+            if (dto.alunoId() != null) {
+                final UUID alunoIdInformado = alunoResponsavel.getId();
+                boolean alunoVinculado = sessao.getRotinaTreino() != null &&
+                        sessao.getRotinaTreino().getAlunos() != null &&
+                        sessao.getRotinaTreino().getAlunos().stream().anyMatch(a -> a.getId().equals(alunoIdInformado));
+                if (!alunoVinculado) {
+                    throw new BusinessException("O aluno informado não está vinculado a esta rotina de treino.");
+                }
             }
 
             // US-10: O registro feito pelo personal exige ao menos um resultado de métrica
@@ -964,7 +991,7 @@ public class RotinaTreinoService {
             notificacaoService.notificarTreinoConcluido(alunoResponsavel, sessao);
         }
 
-        return toSessaoResponseDTO(sessao);
+        return toSessaoResponseDTO(sessao, isPersonal ? null : alunoResponsavel.getId());
     }
 
 
@@ -982,6 +1009,7 @@ public class RotinaTreinoService {
 
     @Transactional(readOnly = true)
     public Page<SessaoTreinoResponseDTO> consultarHistoricoRotina(Usuario usuario, UUID rotinaId, Pageable pageable) {
+        UUID alunoIdVisualizador = null;
         if (usuario.getRole() == Role.PERSONAL_TRAINER) {
             PersonalTrainer personal = obterPersonalLogado(usuario);
             rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaId, personal.getId())
@@ -989,18 +1017,21 @@ public class RotinaTreinoService {
         } else {
             Aluno aluno = alunoRepository.findByUsuario(usuario)
                     .orElseThrow(() -> new NotFoundException("Aluno não encontrado."));
+            alunoIdVisualizador = aluno.getId();
             rotinaTreinoRepository.findById(rotinaId)
                     .filter(r -> r.getAlunos().contains(aluno))
                     .orElseThrow(() -> new NotFoundException("Rotina de treino não encontrada para este aluno."));
         }
 
+        final UUID filtroAlunoId = alunoIdVisualizador;
         // US-10 Cenário 8: Histórico - treinos realizados e resultados
         return sessaoTreinoRepository.findByRotinaTreinoIdAndStatusOrderByDataRealDesc(rotinaId, StatusSessaoTreino.CONCLUIDA, pageable)
-                .map(this::toSessaoResponseDTO);
+                .map(s -> toSessaoResponseDTO(s, filtroAlunoId));
     }
 
     @Transactional(readOnly = true)
     public List<SessaoTreinoResponseDTO> consultarHistoricoRotina(Usuario usuario, UUID rotinaId) {
+        UUID alunoIdVisualizador = null;
         if (usuario.getRole() == Role.PERSONAL_TRAINER) {
             PersonalTrainer personal = obterPersonalLogado(usuario);
             rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaId, personal.getId())
@@ -1008,15 +1039,17 @@ public class RotinaTreinoService {
         } else {
             Aluno aluno = alunoRepository.findByUsuario(usuario)
                     .orElseThrow(() -> new NotFoundException("Aluno não encontrado."));
+            alunoIdVisualizador = aluno.getId();
             rotinaTreinoRepository.findById(rotinaId)
                     .filter(r -> r.getAlunos().contains(aluno))
                     .orElseThrow(() -> new NotFoundException("Rotina de treino não encontrada para este aluno."));
         }
 
+        final UUID filtroAlunoId = alunoIdVisualizador;
         // US-10 Cenário 8: Histórico - treinos realizados e resultados
         return sessaoTreinoRepository.findByRotinaTreinoIdAndStatusOrderByDataRealDesc(rotinaId, StatusSessaoTreino.CONCLUIDA)
                 .stream()
-                .map(this::toSessaoResponseDTO)
+                .map(s -> toSessaoResponseDTO(s, filtroAlunoId))
                 .toList();
     }
 
@@ -1043,29 +1076,38 @@ public class RotinaTreinoService {
     }
 
     public SessaoTreinoResponseDTO toSessaoResponseDTO(SessaoTreino sessao) {
+        return toSessaoResponseDTO(sessao, null);
+    }
+
+    public SessaoTreinoResponseDTO toSessaoResponseDTO(SessaoTreino sessao, UUID alunoIdVisualizador) {
         DesempenhoResponseDTO desempenhoDTO = null;
         if (sessao.getDesempenho() != null) {
             Desempenho d = sessao.getDesempenho();
-            List<RegistroMetricaResponseDTO> metricasDTO = d.getRegistrosMetricas() != null ? d.getRegistrosMetricas().stream()
-                    .map(rm -> new RegistroMetricaResponseDTO(
-                            rm.getId(),
-                            rm.getMetrica().getId(),
-                            rm.getMetrica().getTitulo(),
-                            rm.getMetrica().getTipo(),
-                            rm.getValor()
-                    ))
-                    .toList() : List.of();
+            boolean podeVisualizarDesempenho = (alunoIdVisualizador == null)
+                    || (d.getAluno() != null && alunoIdVisualizador.equals(d.getAluno().getId()));
 
-            desempenhoDTO = new DesempenhoResponseDTO(
-                    d.getId(),
-                    d.getDataRegistro(),
-                    d.getNivelCansaco(),
-                    d.getRegistradoPor(),
-                    d.getAluno() != null ? d.getAluno().getId() : null,
-                    d.getAluno() != null && d.getAluno().getUsuario() != null ? d.getAluno().getUsuario().getNome() : null,
-                    d.getObservacoes(),
-                    metricasDTO
-            );
+            if (podeVisualizarDesempenho) {
+                List<RegistroMetricaResponseDTO> metricasDTO = d.getRegistrosMetricas() != null ? d.getRegistrosMetricas().stream()
+                        .map(rm -> new RegistroMetricaResponseDTO(
+                                rm.getId(),
+                                rm.getMetrica().getId(),
+                                rm.getMetrica().getTitulo(),
+                                rm.getMetrica().getTipo(),
+                                rm.getValor()
+                        ))
+                        .toList() : List.of();
+
+                desempenhoDTO = new DesempenhoResponseDTO(
+                        d.getId(),
+                        d.getDataRegistro(),
+                        d.getNivelCansaco(),
+                        d.getRegistradoPor(),
+                        d.getAluno() != null ? d.getAluno().getId() : null,
+                        d.getAluno() != null && d.getAluno().getUsuario() != null ? d.getAluno().getUsuario().getNome() : null,
+                        d.getObservacoes(),
+                        metricasDTO
+                );
+            }
         }
 
         return new SessaoTreinoResponseDTO(
