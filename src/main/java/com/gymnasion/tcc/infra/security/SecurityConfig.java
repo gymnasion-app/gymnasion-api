@@ -57,7 +57,7 @@ public class SecurityConfig {
                         .requestMatchers("/personal-trainers/**").hasRole("PERSONAL_TRAINER")
                         .requestMatchers("/alunos/**").hasRole("ALUNO")
                         .requestMatchers(HttpMethod.GET, "/modalidades/**").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/modalidades/**").hasRole("ADMIN")
+                        .requestMatchers("/modalidades/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(securityFilter, UsernamePasswordAuthenticationFilter.class)

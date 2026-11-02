@@ -22,13 +22,20 @@ public class ModalidadeService {
 
     @Transactional(readOnly = true)
     public Page<ModalidadeResponseDTO> listarTodas(Pageable pageable) {
-        return modalidadeRepository.findAll(pageable)
-                .map(this::toDTO);
+        return listarTodas(pageable, true);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ModalidadeResponseDTO> listarTodas(Pageable pageable, boolean apenasAtivas) {
+        if (apenasAtivas) {
+            return modalidadeRepository.findByAtivoTrue(pageable).map(this::toDTO);
+        }
+        return modalidadeRepository.findAll(pageable).map(this::toDTO);
     }
 
     @Transactional(readOnly = true)
     public List<ModalidadeResponseDTO> listarTodas() {
-        return modalidadeRepository.findAll()
+        return modalidadeRepository.findByAtivoTrue()
                 .stream()
                 .map(this::toDTO)
                 .toList();
@@ -50,8 +57,45 @@ public class ModalidadeService {
         Modalidade modalidade = Modalidade.builder()
                 .nome(dto.nome().trim())
                 .descricao(dto.descricao() != null ? dto.descricao().trim() : null)
+                .ativo(true)
                 .build();
 
+        modalidade = modalidadeRepository.save(modalidade);
+        return toDTO(modalidade);
+    }
+
+    @Transactional
+    public ModalidadeResponseDTO desativar(Long id) {
+        Modalidade modalidade = modalidadeRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("Modalidade não encontrada."));
+        modalidade.setAtivo(false);
+        modalidade = modalidadeRepository.save(modalidade);
+        return toDTO(modalidade);
+    }
+
+    @Transactional
+    public ModalidadeResponseDTO ativar(Long id) {
+        Modalidade modalidade = modalidadeRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("Modalidade não encontrada."));
+        modalidade.setAtivo(true);
+        modalidade = modalidadeRepository.save(modalidade);
+        return toDTO(modalidade);
+    }
+
+    @Transactional
+    public ModalidadeResponseDTO atualizar(Long id, ModalidadeRequestDTO dto) {
+        Modalidade modalidade = modalidadeRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("Modalidade não encontrada."));
+
+        if (!modalidade.getNome().equalsIgnoreCase(dto.nome().trim()) &&
+                modalidadeRepository.existsByNomeIgnoreCaseAndIdNot(dto.nome().trim(), id)) {
+            throw new DuplicateResourceException("Já existe uma modalidade cadastrada com esse nome.");
+        }
+
+        modalidade.setNome(dto.nome().trim());
+        if (dto.descricao() != null) {
+            modalidade.setDescricao(dto.descricao().trim());
+        }
         modalidade = modalidadeRepository.save(modalidade);
         return toDTO(modalidade);
     }
@@ -60,7 +104,8 @@ public class ModalidadeService {
         return new ModalidadeResponseDTO(
                 modalidade.getId(),
                 modalidade.getNome(),
-                modalidade.getDescricao()
+                modalidade.getDescricao(),
+                modalidade.getAtivo()
         );
     }
 }

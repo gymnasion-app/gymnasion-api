@@ -14,6 +14,7 @@ import com.gymnasion.tcc.dto.MetricaResponseDTO;
 import com.gymnasion.tcc.exceptions.BusinessException;
 import com.gymnasion.tcc.exceptions.DuplicateResourceException;
 import com.gymnasion.tcc.exceptions.NotFoundException;
+import com.gymnasion.tcc.repository.AuditoriaDesempenhoRepository;
 import com.gymnasion.tcc.repository.MetricaRepository;
 import com.gymnasion.tcc.repository.ModalidadeRepository;
 import com.gymnasion.tcc.repository.PersonalTrainerRepository;
@@ -54,6 +55,9 @@ class MetricaServiceTest {
     @Mock
     private RotinaTreinoRepository rotinaTreinoRepository;
 
+    @Mock
+    private AuditoriaDesempenhoRepository auditoriaDesempenhoRepository;
+
     @InjectMocks
     private MetricaService metricaService;
 
@@ -86,7 +90,7 @@ class MetricaServiceTest {
         // Dado: um personal autenticado e dados válidos para criação de métrica
         when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
         when(modalidadeRepository.findById(1L)).thenReturn(Optional.of(modalidade));
-        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCase(
+        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndAtivoTrue(
                 personalTrainer.getId(), 1L, "Tempo 100m")).thenReturn(false);
 
         CriarMetricaRequestDTO dto = new CriarMetricaRequestDTO(
@@ -150,7 +154,7 @@ class MetricaServiceTest {
     void US18_cenario3_tituloDuplicadoMesmaModalidadeEPersonal() {
         // Dado: já existe métrica com o mesmo título na mesma modalidade
         when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
-        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCase(
+        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndAtivoTrue(
                 personalTrainer.getId(), 1L, "Tempo 100m")).thenReturn(true);
 
         CriarMetricaRequestDTO dto = new CriarMetricaRequestDTO(
@@ -231,7 +235,7 @@ class MetricaServiceTest {
         // Dado: DTO com responsável exclusivo PERSONAL e obrigatoria=true
         when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
         when(modalidadeRepository.findById(1L)).thenReturn(Optional.of(modalidade));
-        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCase(any(), any(), any()))
+        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndAtivoTrue(any(), any(), any()))
                 .thenReturn(false);
 
         CriarMetricaRequestDTO dto = new CriarMetricaRequestDTO(
@@ -273,7 +277,7 @@ class MetricaServiceTest {
         when(metricaRepository.findByIdAndPersonalTrainerId(metricaId, personalTrainer.getId()))
                 .thenReturn(Optional.of(m));
         when(registroMetricaRepository.existsByMetricaId(metricaId)).thenReturn(false);
-        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndIdNot(
+        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndIdNotAndAtivoTrue(
                 personalTrainer.getId(), 1L, "Tempo 100m Livre", metricaId)).thenReturn(false);
         when(metricaRepository.save(any(Metrica.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(registroMetricaRepository.countAlunosComRegistrosByMetricaId(metricaId)).thenReturn(0L);
@@ -414,7 +418,7 @@ class MetricaServiceTest {
         );
 
         when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
-        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCase(
+        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndAtivoTrue(
                 personalTrainer.getId(), 1L, "Cadência Média")).thenReturn(false);
         when(modalidadeRepository.findById(1L)).thenReturn(Optional.of(modalidade));
         when(metricaRepository.save(any(Metrica.class))).thenAnswer(inv -> {
@@ -438,12 +442,108 @@ class MetricaServiceTest {
         );
 
         when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
-        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCase(
+        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndAtivoTrue(
                 personalTrainer.getId(), 1L, "Tempo Incompatível")).thenReturn(false);
         when(modalidadeRepository.findById(1L)).thenReturn(Optional.of(modalidade));
 
         assertThatThrownBy(() -> metricaService.criarMetrica(usuarioLogado, dto))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("O campo do Strava selecionado não é compatível com o tipo de métrica.");
+    }
+
+    @Test
+    @DisplayName("US18: Criar métrica em modalidade desativada lança BusinessException")
+    void US18_criarMetrica_modalidadeDesativada_lancaBusinessException() {
+        Modalidade modalidadeDesativada = Modalidade.builder().id(2L).nome("Boxe").ativo(false).build();
+        CriarMetricaRequestDTO dto = new CriarMetricaRequestDTO(
+                2L, "Golpes", TipoMetrica.NUMERICO, false, ResponsavelPreenchimento.PERSONAL
+        );
+
+        when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
+        when(modalidadeRepository.findById(2L)).thenReturn(Optional.of(modalidadeDesativada));
+
+        assertThatThrownBy(() -> metricaService.criarMetrica(usuarioLogado, dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Não é possível cadastrar métricas em uma modalidade desativada.");
+    }
+
+    @Test
+    @DisplayName("US18 / RN-016: Permite recriar métrica com o mesmo nome se a anterior foi descontinuada (ativo=false)")
+    void US18_criarMetrica_mesmoNomeDeMetricaDescontinuada_criaComSucesso() {
+        // Se a métrica antiga está descontinuada (ativo=false), existsBy...AndAtivoTrue retorna false
+        when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
+        when(modalidadeRepository.findById(1L)).thenReturn(Optional.of(modalidade));
+        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndAtivoTrue(
+                personalTrainer.getId(), 1L, "Tempo 100m")).thenReturn(false);
+
+        CriarMetricaRequestDTO dto = new CriarMetricaRequestDTO(
+                1L, "Tempo 100m", TipoMetrica.TEMPO, true, ResponsavelPreenchimento.AMBOS
+        );
+
+        when(metricaRepository.save(any(Metrica.class))).thenAnswer(inv -> {
+            Metrica m = inv.getArgument(0);
+            m.setId(UUID.randomUUID());
+            return m;
+        });
+
+        MetricaResponseDTO response = metricaService.criarMetrica(usuarioLogado, dto);
+        assertThat(response).isNotNull();
+        assertThat(response.titulo()).isEqualTo("Tempo 100m");
+    }
+
+    @Test
+    @DisplayName("US19: Alterar tipo de métrica vinculada a rotinas prescritas lança BusinessException")
+    void US19_atualizarMetrica_tipoComRotinaPrescrita_lancaBusinessException() {
+        UUID metricaId = UUID.randomUUID();
+        Metrica m = Metrica.builder()
+                .id(metricaId)
+                .titulo("Tempo 50m")
+                .tipo(TipoMetrica.TEMPO)
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .ativo(true)
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
+        when(metricaRepository.findByIdAndPersonalTrainerId(metricaId, personalTrainer.getId()))
+                .thenReturn(Optional.of(m));
+        // Sem registros de desempenho, porém já está vinculada a rotinas de treino
+        when(registroMetricaRepository.existsByMetricaId(metricaId)).thenReturn(false);
+        when(rotinaTreinoRepository.existsByMetricaId(metricaId)).thenReturn(true);
+
+        AtualizarMetricaRequestDTO dto = new AtualizarMetricaRequestDTO(
+                "Tempo 50m", TipoMetrica.NUMERICO, false, ResponsavelPreenchimento.AMBOS
+        );
+
+        assertThatThrownBy(() -> metricaService.atualizarMetrica(metricaId, usuarioLogado, dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Não é possível alterar o tipo de uma métrica com histórico de registros. Crie uma nova métrica.");
+    }
+
+    @Test
+    @DisplayName("US19 / RN-017: Métrica com registros em auditoria de desempenho é descontinuada logicamente (soft-delete)")
+    void US19_excluirMetrica_comAuditoriaDesempenho_descontinuaLogicamente() {
+        UUID metricaId = UUID.randomUUID();
+        Metrica m = Metrica.builder()
+                .id(metricaId)
+                .titulo("Carga")
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .ativo(true)
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
+        when(metricaRepository.findByIdAndPersonalTrainerId(metricaId, personalTrainer.getId()))
+                .thenReturn(Optional.of(m));
+        when(registroMetricaRepository.existsByMetricaId(metricaId)).thenReturn(false);
+        when(rotinaTreinoRepository.existsByMetricaId(metricaId)).thenReturn(false);
+        when(auditoriaDesempenhoRepository.existsByMetricaId(metricaId)).thenReturn(true);
+
+        MensagemResponseDTO resp = metricaService.excluirMetrica(metricaId, usuarioLogado);
+
+        assertThat(resp.mensagem()).isEqualTo("Métrica descontinuada com sucesso. O histórico foi mantido.");
+        assertThat(m.getAtivo()).isFalse();
+        verify(metricaRepository).save(m);
+        verify(metricaRepository, never()).delete(any());
     }
 }

@@ -48,6 +48,10 @@ public class RotinaTreinoService {
         Modalidade modalidade = modalidadeRepository.findById(dto.modalidadeId())
                 .orElseThrow(() -> new NotFoundException("Modalidade não encontrada."));
 
+        if (Boolean.FALSE.equals(modalidade.getAtivo())) {
+            throw new BusinessException("Esta modalidade está desativada e não pode receber novas rotinas de treino.");
+        }
+
         // US-10 Cenário 2: Verifica se existem métricas cadastradas para a modalidade antes de continuar
         List<Metrica> metricasDaModalidade = metricaRepository.findByPersonalTrainerIdAndModalidadeId(
                 personal.getId(), dto.modalidadeId()

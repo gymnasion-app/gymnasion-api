@@ -12,6 +12,7 @@ import com.gymnasion.tcc.dto.MetricaResponseDTO;
 import com.gymnasion.tcc.exceptions.BusinessException;
 import com.gymnasion.tcc.exceptions.DuplicateResourceException;
 import com.gymnasion.tcc.exceptions.NotFoundException;
+import com.gymnasion.tcc.repository.AuditoriaDesempenhoRepository;
 import com.gymnasion.tcc.repository.MetricaRepository;
 import com.gymnasion.tcc.repository.ModalidadeRepository;
 import com.gymnasion.tcc.repository.PersonalTrainerRepository;
@@ -35,12 +36,13 @@ public class MetricaService {
     private final PersonalTrainerRepository personalTrainerRepository;
     private final RegistroMetricaRepository registroMetricaRepository;
     private final RotinaTreinoRepository rotinaTreinoRepository;
+    private final AuditoriaDesempenhoRepository auditoriaDesempenhoRepository;
 
     @Transactional
     public MetricaResponseDTO criarMetrica(Usuario usuario, CriarMetricaRequestDTO dto) {
         PersonalTrainer personal = obterPersonalLogado(usuario);
 
-        boolean existeDuplicado = metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCase(
+        boolean existeDuplicado = metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndAtivoTrue(
                 personal.getId(), dto.modalidadeId(), dto.titulo().trim()
         );
 
@@ -50,6 +52,10 @@ public class MetricaService {
 
         Modalidade modalidade = modalidadeRepository.findById(dto.modalidadeId())
                 .orElseThrow(() -> new NotFoundException("Modalidade não encontrada."));
+
+        if (Boolean.FALSE.equals(modalidade.getAtivo())) {
+            throw new BusinessException("Não é possível cadastrar métricas em uma modalidade desativada.");
+        }
 
         if (dto.campoStrava() != null && !dto.campoStrava().isCompativelCom(dto.tipo())) {
             throw new BusinessException("O campo do Strava selecionado não é compatível com o tipo de métrica.");
@@ -102,7 +108,8 @@ public class MetricaService {
         Metrica metrica = metricaRepository.findByIdAndPersonalTrainerId(metricaId, personal.getId())
                 .orElseThrow(() -> new NotFoundException("Métrica não encontrada ou não pertence a este Personal Trainer."));
 
-        boolean possuiHistorico = registroMetricaRepository.existsByMetricaId(metricaId);
+        boolean possuiHistorico = registroMetricaRepository.existsByMetricaId(metricaId)
+                || rotinaTreinoRepository.existsByMetricaId(metricaId);
 
         if (dto.tipo() != null && dto.tipo() != metrica.getTipo()) {
             if (possuiHistorico) {
@@ -128,7 +135,7 @@ public class MetricaService {
         }
 
         if (!metrica.getTitulo().equalsIgnoreCase(dto.titulo().trim())) {
-            boolean tituloEmUso = metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndIdNot(
+            boolean tituloEmUso = metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndIdNotAndAtivoTrue(
                     personal.getId(), metrica.getModalidade().getId(), dto.titulo().trim(), metricaId
             );
 
@@ -152,7 +159,8 @@ public class MetricaService {
                 .orElseThrow(() -> new NotFoundException("Métrica não encontrada ou não pertence a este Personal Trainer."));
 
         boolean possuiHistorico = registroMetricaRepository.existsByMetricaId(metricaId)
-                || rotinaTreinoRepository.existsByMetricaId(metricaId);
+                || rotinaTreinoRepository.existsByMetricaId(metricaId)
+                || auditoriaDesempenhoRepository.existsByMetricaId(metricaId);
 
         if (possuiHistorico) {
             metrica.setAtivo(false);

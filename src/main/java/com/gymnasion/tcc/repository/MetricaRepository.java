@@ -15,7 +15,11 @@ public interface MetricaRepository extends JpaRepository<Metrica, UUID> {
 
     boolean existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCase(UUID personalId, Long modalidadeId, String titulo);
 
+    boolean existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndAtivoTrue(UUID personalId, Long modalidadeId, String titulo);
+
     boolean existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndIdNot(UUID personalId, Long modalidadeId, String titulo, UUID id);
+
+    boolean existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndIdNotAndAtivoTrue(UUID personalId, Long modalidadeId, String titulo, UUID id);
 
     List<Metrica> findByPersonalTrainerIdAndModalidadeId(UUID personalId, Long modalidadeId);
 

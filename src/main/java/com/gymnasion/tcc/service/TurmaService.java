@@ -45,6 +45,10 @@ public class TurmaService {
         Modalidade modalidade = modalidadeRepository.findById(dto.modalidadeId())
                 .orElseThrow(() -> new NotFoundException("Modalidade não encontrada."));
 
+        if (Boolean.FALSE.equals(modalidade.getAtivo())) {
+            throw new BusinessException("Não é possível criar turmas para uma modalidade desativada.");
+        }
+
         Set<Aluno> alunosValidados = new HashSet<>();
         for (UUID alunoId : dto.alunosIds()) {
             Aluno aluno = alunoRepository.findByIdAndPersonalId(alunoId, personal.getId())
@@ -100,6 +104,10 @@ public class TurmaService {
 
         Modalidade modalidade = modalidadeRepository.findById(dto.modalidadeId())
                 .orElseThrow(() -> new NotFoundException("Modalidade não encontrada."));
+
+        if (Boolean.FALSE.equals(modalidade.getAtivo())) {
+            throw new BusinessException("Não é possível vincular uma modalidade desativada à turma.");
+        }
 
         turma.setNome(dto.nome().trim());
         turma.setModalidade(modalidade);

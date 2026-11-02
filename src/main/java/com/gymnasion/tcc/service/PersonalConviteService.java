@@ -57,6 +57,10 @@ public class PersonalConviteService {
         Modalidade modalidade = modalidadeRepository.findById(dto.modalidadeId())
                 .orElseThrow(() -> new UsernameNotFoundException("Modalidade não encontrada!"));
 
+        if (Boolean.FALSE.equals(modalidade.getAtivo())) {
+            throw new BusinessException("Esta modalidade está desativada e não pode receber novos convites.");
+        }
+
         String token = UUID.randomUUID().toString();
 
         PersonalConvites convite = PersonalConvites.builder()
