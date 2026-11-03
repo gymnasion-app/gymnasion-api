@@ -5,11 +5,13 @@ import com.gymnasion.tcc.domain.IntegracaoStrava;
 import com.gymnasion.tcc.domain.PersonalTrainer;
 import com.gymnasion.tcc.domain.Usuario;
 import com.gymnasion.tcc.domain.enums.Role;
+import com.gymnasion.tcc.domain.enums.StatusConvite;
 import com.gymnasion.tcc.dto.StravaAtividadeDTO;
 import com.gymnasion.tcc.dto.StravaAuthUrlResponseDTO;
 import com.gymnasion.tcc.dto.StravaConectarRequestDTO;
 import com.gymnasion.tcc.dto.StravaStatusResponseDTO;
 import com.gymnasion.tcc.exceptions.BusinessException;
+import com.gymnasion.tcc.exceptions.DuplicateResourceException;
 import com.gymnasion.tcc.exceptions.NotFoundException;
 import com.gymnasion.tcc.infra.config.StravaProperties;
 import com.gymnasion.tcc.repository.AlunoRepository;
@@ -102,6 +104,7 @@ class StravaServiceTest {
                 .id(UUID.randomUUID())
                 .usuario(usuarioAluno)
                 .personal(personal)
+                .status(StatusConvite.ATIVO)
                 .build();
     }
 
@@ -350,7 +353,7 @@ class StravaServiceTest {
 
         assertThatThrownBy(() -> stravaService.conectar(usuarioAluno,
                 new StravaConectarRequestDTO("code-real", "read,activity:read_all", state)))
-                .isInstanceOf(BusinessException.class)
+                .isInstanceOf(DuplicateResourceException.class)
                 .hasMessage("Esta conta do Strava já está vinculada a outro aluno.");
 
         verify(integracaoStravaRepository, never()).save(any());
@@ -679,5 +682,37 @@ class StravaServiceTest {
         assertThatThrownBy(() -> stravaService.obterStatusPorPersonal(aluno.getId(), outroPersonalId))
                 .isInstanceOf(NotFoundException.class)
                 .hasMessage("Aluno não encontrado ou não pertence a este Personal Trainer.");
+    }
+
+    @Test
+    @DisplayName("US-14 / RN-014: Personal trainer não pode acessar Strava de aluno inativo")
+    void obterStatusPorPersonal_quandoAlunoInativo_lancaBusinessException() {
+        Aluno alunoInativo = Aluno.builder()
+                .id(UUID.randomUUID())
+                .usuario(usuarioAluno)
+                .personal(personal)
+                .status(StatusConvite.INATIVO)
+                .build();
+        when(alunoRepository.findById(alunoInativo.getId())).thenReturn(Optional.of(alunoInativo));
+
+        assertThatThrownBy(() -> stravaService.obterStatusPorPersonal(alunoInativo.getId(), usuarioPersonal.getId()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Erro. Este aluno está inativo.");
+    }
+
+    @Test
+    @DisplayName("US-14 / RN-014: Personal trainer não pode listar atividades de aluno inativo")
+    void listarAtividadesPorPersonal_quandoAlunoInativo_lancaBusinessException() {
+        Aluno alunoInativo = Aluno.builder()
+                .id(UUID.randomUUID())
+                .usuario(usuarioAluno)
+                .personal(personal)
+                .status(StatusConvite.INATIVO)
+                .build();
+        when(alunoRepository.findById(alunoInativo.getId())).thenReturn(Optional.of(alunoInativo));
+
+        assertThatThrownBy(() -> stravaService.listarAtividadesPorPersonal(alunoInativo.getId(), usuarioPersonal.getId(), 10))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Erro. Este aluno está inativo.");
     }
 }

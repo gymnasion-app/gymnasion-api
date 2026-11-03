@@ -4,11 +4,13 @@ import com.gymnasion.tcc.domain.Aluno;
 import com.gymnasion.tcc.domain.IntegracaoStrava;
 import com.gymnasion.tcc.domain.Usuario;
 import com.gymnasion.tcc.domain.enums.Role;
+import com.gymnasion.tcc.domain.enums.StatusConvite;
 import com.gymnasion.tcc.dto.StravaAtividadeDTO;
 import com.gymnasion.tcc.dto.StravaAuthUrlResponseDTO;
 import com.gymnasion.tcc.dto.StravaConectarRequestDTO;
 import com.gymnasion.tcc.dto.StravaStatusResponseDTO;
 import com.gymnasion.tcc.exceptions.BusinessException;
+import com.gymnasion.tcc.exceptions.DuplicateResourceException;
 import com.gymnasion.tcc.exceptions.NotFoundException;
 import com.gymnasion.tcc.infra.config.StravaProperties;
 import com.gymnasion.tcc.repository.AlunoRepository;
@@ -38,6 +40,7 @@ import java.security.MessageDigest;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Integração com o Strava API v3 (US-14).
@@ -74,6 +77,7 @@ public class StravaService {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final ConcurrentHashMap<UUID, Object> refreshLocks = new ConcurrentHashMap<>();
 
     @Autowired
     public StravaService(
@@ -220,7 +224,7 @@ public class StravaService {
 
         if (atletaId != null && integracaoStravaRepository.existsByAtletaIdAndAlunoIdNot(atletaId, aluno.getId())) {
             log.warn("Atleta Strava id={} já vinculado a outro aluno; conexão recusada para o aluno id={}", atletaId, aluno.getId());
-            throw new BusinessException("Esta conta do Strava já está vinculada a outro aluno.");
+            throw new DuplicateResourceException("Esta conta do Strava já está vinculada a outro aluno.");
         }
 
         log.info("Strava conectado com sucesso para o aluno id={}, atletaId={}", aluno.getId(), atletaId);
@@ -375,46 +379,75 @@ public class StravaService {
             return;
         }
 
-        exigirCredenciais();
+        Object lock = refreshLocks.computeIfAbsent(integracao.getId(), k -> new Object());
+        synchronized (lock) {
+            try {
+                // Re-consulta o banco caso outra thread já tenha renovado o token enquanto esta aguardava o lock
+                Optional<IntegracaoStrava> doBanco = integracaoStravaRepository.findById(integracao.getId());
+                if (doBanco.isPresent()) {
+                    IntegracaoStrava atual = doBanco.get();
+                    if (atual.getExpiraEm().isAfter(OffsetDateTime.now(clock).plus(ANTECEDENCIA_RENOVACAO))) {
+                        integracao.setAccessToken(atual.getAccessToken());
+                        integracao.setRefreshToken(atual.getRefreshToken());
+                        integracao.setExpiraEm(atual.getExpiraEm());
+                        integracao.setReconexaoPendente(atual.isReconexaoPendente());
+                        return;
+                    }
+                }
 
-        log.info("Renovando token do Strava para a integracao id={}", integracao.getId());
-        TokenStrava token;
-        try {
-            MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
-            formData.add("client_id", stravaProperties.getClientId());
-            formData.add("client_secret", stravaProperties.getClientSecret());
-            formData.add("grant_type", "refresh_token");
-            formData.add("refresh_token", integracao.getRefreshToken());
+                exigirCredenciais();
 
-            String responseBody = restClient.post()
-                    .uri(STRAVA_OAUTH_TOKEN_URL)
-                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .body(formData)
-                    .retrieve()
-                    .body(String.class);
+                log.info("Renovando token do Strava para a integracao id={}", integracao.getId());
+                TokenStrava token;
+                try {
+                    MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
+                    formData.add("client_id", stravaProperties.getClientId());
+                    formData.add("client_secret", stravaProperties.getClientSecret());
+                    formData.add("grant_type", "refresh_token");
+                    formData.add("refresh_token", integracao.getRefreshToken());
 
-            token = lerToken(objectMapper.readTree(responseBody));
-        } catch (RestClientResponseException e) {
-            log.error("Strava recusou a renovação do token: HTTP {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
-            // 400/401 indicam refresh token inválido ou revogado; 429 e 5xx são transitórios
-            int status = e.getStatusCode().value();
-            if (status == 400 || status == 401) {
-                marcarReconexaoPendente(integracao, usuario);
-                throw new BusinessException(MSG_TOKEN_EXPIRADO);
+                    String responseBody = restClient.post()
+                            .uri(STRAVA_OAUTH_TOKEN_URL)
+                            .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                            .accept(MediaType.APPLICATION_JSON)
+                            .body(formData)
+                            .retrieve()
+                            .body(String.class);
+
+                    token = lerToken(objectMapper.readTree(responseBody));
+                } catch (RestClientResponseException e) {
+                    log.error("Strava recusou a renovação do token: HTTP {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
+                    // 400/401 indicam refresh token inválido ou revogado; 429 e 5xx são transitórios
+                    int status = e.getStatusCode().value();
+                    if (status == 400 || status == 401) {
+                        // Antes de marcar como reconexão pendente, verifica se outra thread concorrente acabou de renovar
+                        Optional<IntegracaoStrava> recheck = integracaoStravaRepository.findById(integracao.getId());
+                        if (recheck.isPresent() && recheck.get().getExpiraEm().isAfter(OffsetDateTime.now(clock).plus(ANTECEDENCIA_RENOVACAO))) {
+                            integracao.setAccessToken(recheck.get().getAccessToken());
+                            integracao.setRefreshToken(recheck.get().getRefreshToken());
+                            integracao.setExpiraEm(recheck.get().getExpiraEm());
+                            integracao.setReconexaoPendente(recheck.get().isReconexaoPendente());
+                            return;
+                        }
+                        marcarReconexaoPendente(integracao, usuario);
+                        throw new BusinessException(MSG_TOKEN_EXPIRADO);
+                    }
+                    throw new BusinessException(MSG_FALHA_COMUNICACAO);
+                } catch (Exception e) {
+                    // Falha de rede ou resposta inválida: não exige reconexão, apenas tenta de novo depois
+                    log.error("Falha ao renovar token do Strava: {}", e.getMessage());
+                    throw new BusinessException(MSG_FALHA_COMUNICACAO);
+                }
+
+                integracao.setAccessToken(token.accessToken());
+                integracao.setRefreshToken(token.refreshToken());
+                integracao.setExpiraEm(token.expiraEm());
+                integracaoStravaRepository.save(integracao);
+                log.info("Token Strava renovado com sucesso para a integracao id={}", integracao.getId());
+            } finally {
+                refreshLocks.remove(integracao.getId(), lock);
             }
-            throw new BusinessException(MSG_FALHA_COMUNICACAO);
-        } catch (Exception e) {
-            // Falha de rede ou resposta inválida: não exige reconexão, apenas tenta de novo depois
-            log.error("Falha ao renovar token do Strava: {}", e.getMessage());
-            throw new BusinessException(MSG_FALHA_COMUNICACAO);
         }
-
-        integracao.setAccessToken(token.accessToken());
-        integracao.setRefreshToken(token.refreshToken());
-        integracao.setExpiraEm(token.expiraEm());
-        integracaoStravaRepository.save(integracao);
-        log.info("Token Strava renovado com sucesso para a integracao id={}", integracao.getId());
     }
 
     private void marcarReconexaoPendente(IntegracaoStrava integracao, Usuario usuario) {
@@ -811,6 +844,12 @@ public class StravaService {
         if (!aluno.getPersonal().getUsuario().getId().equals(personalUsuarioId)) {
             throw new NotFoundException("Aluno não encontrado ou não pertence a este Personal Trainer.");
         }
+
+        // RN-014: Aluno inativo não tem dados compartilhados
+        if (aluno.getStatus() != StatusConvite.ATIVO) {
+            throw new BusinessException("Erro. Este aluno está inativo.");
+        }
+
         return aluno;
     }
 

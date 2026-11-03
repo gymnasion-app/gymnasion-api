@@ -72,11 +72,15 @@ public class SecurityFilter extends OncePerRequestFilter {
             return;
         }
 
-        // RN-014: Aluno inativo perde login imediatamente
+        // RN-014: Aluno inativo ou sem cadastro ativo perde/não tem acesso
         if (usuario.getRole() == com.gymnasion.tcc.domain.enums.Role.ALUNO) {
             com.gymnasion.tcc.domain.Aluno aluno = alunoRepository.findByUsuario(usuario).orElse(null);
-            if (aluno != null && aluno.getStatus() == com.gymnasion.tcc.domain.enums.StatusConvite.INATIVO) {
-                handleUnauthorizedResponse(response, "Erro. Este aluno está inativo.");
+            if (aluno == null || aluno.getStatus() != com.gymnasion.tcc.domain.enums.StatusConvite.ATIVO) {
+                if (aluno != null && aluno.getStatus() == com.gymnasion.tcc.domain.enums.StatusConvite.INATIVO) {
+                    handleUnauthorizedResponse(response, "Erro. Este aluno está inativo.");
+                    return;
+                }
+                handleUnauthorizedResponse(response, "Acesso restrito a alunos com cadastro ativo.");
                 return;
             }
         }

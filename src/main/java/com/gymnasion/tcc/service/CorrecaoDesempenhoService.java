@@ -173,6 +173,11 @@ public class CorrecaoDesempenhoService {
     }
 
     private AuditoriaDesempenhoResponseDTO toAuditoriaResponseDTO(AuditoriaDesempenho auditoria) {
+        String responsavelRole = null;
+        if (auditoria.getUsuario() != null && auditoria.getUsuario().getRole() != null) {
+            responsavelRole = "ROLE_" + auditoria.getUsuario().getRole().name();
+        }
+
         return new AuditoriaDesempenhoResponseDTO(
                 auditoria.getId(),
                 auditoria.getTipoOperacao(),
@@ -183,7 +188,8 @@ public class CorrecaoDesempenhoService {
                 auditoria.getValorNovo(),
                 auditoria.getUsuario().getId(),
                 auditoria.getUsuario().getNome(),
-                auditoria.getDataHora()
+                auditoria.getDataHora(),
+                responsavelRole
         );
     }
 

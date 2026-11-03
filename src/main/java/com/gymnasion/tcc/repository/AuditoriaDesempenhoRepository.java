@@ -14,4 +14,6 @@ public interface AuditoriaDesempenhoRepository extends JpaRepository<AuditoriaDe
     List<AuditoriaDesempenho> findByDesempenhoIdOrderByDataHoraAsc(UUID desempenhoId);
 
     Page<AuditoriaDesempenho> findByDesempenhoIdOrderByDataHoraAsc(UUID desempenhoId, Pageable pageable);
+
+    boolean existsByMetricaId(UUID metricaId);
 }

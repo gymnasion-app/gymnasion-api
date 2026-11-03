@@ -1,5 +1,6 @@
 package com.gymnasion.tcc.service;
 
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -31,6 +32,16 @@ public class LoginAttemptService {
 
     public void setClock(Clock clock) {
         this.clock = clock;
+    }
+
+    /**
+     * Expurgo periódico em memória de entradas de tentativas de login expiradas (RN-010).
+     * Roda a cada 10 minutos (600.000 ms) liberando memória ocupada por falhas inativas.
+     */
+    @Scheduled(fixedRate = 600_000)
+    public synchronized void expurgarTentativasExpiradas() {
+        Instant agora = clock.instant();
+        tentativasMap.entrySet().removeIf(entry -> entry.getValue().isBloqueioExpirado(agora, TEMPO_BLOQUEIO));
     }
 
     public synchronized void loginFailed(String email) {

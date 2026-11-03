@@ -13,11 +13,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
+import com.gymnasion.tcc.event.ConviteAlunoCriadoEvent;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -53,7 +56,7 @@ class PersonalConviteServiceTest {
     private NotificacaoService notificacaoService;
 
     @Mock
-    private EmailService emailService;
+    private ApplicationEventPublisher eventPublisher;
 
     @Mock
     private UsuarioService usuarioService;
@@ -113,7 +116,12 @@ class PersonalConviteServiceTest {
         assertThat(response.url()).contains("/cadastro-aluno?token=");
         assertThat(response.emailEnviado()).isEqualTo("aluno@gymnasion.com");
         verify(personalConviteRepository).save(any(PersonalConvites.class));
-        verify(emailService).enviarConviteAluno(eq("aluno@gymnasion.com"), eq("Amanda Souza"), eq("Natação"), anyString());
+        ArgumentCaptor<ConviteAlunoCriadoEvent> captor = ArgumentCaptor.forClass(ConviteAlunoCriadoEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().emailAluno()).isEqualTo("aluno@gymnasion.com");
+        assertThat(captor.getValue().nomePersonal()).isEqualTo("Amanda Souza");
+        assertThat(captor.getValue().nomeModalidade()).isEqualTo("Natação");
+        assertThat(captor.getValue().linkCadastro()).contains("/cadastro-aluno?token=");
     }
 
     @Test
@@ -129,7 +137,7 @@ class PersonalConviteServiceTest {
         assertThat(response.url()).contains("/cadastro-aluno?token=");
         assertThat(response.emailEnviado()).isNull();
         verify(personalConviteRepository).save(any(PersonalConvites.class));
-        verifyNoInteractions(emailService);
+        verifyNoInteractions(eventPublisher);
     }
 
     @Test

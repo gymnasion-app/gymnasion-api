@@ -23,6 +23,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -2521,5 +2522,251 @@ class RotinaTreinoServiceTest {
                 .contains(aluno2.getId());
         assertThat(rotinaConflitante.getAtivo()).isFalse();
         assertThat(rotinaConflitante.getSessoes()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("US11/US25 Vincular alunos: rotina com sessões já executadas é bloqueada para novas vinculações diretas")
+    void vincularAlunos_rotinaComSessoesExecutadas_bloqueado() {
+        SessaoTreino sessaoExecutada = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .status(StatusSessaoTreino.CONCLUIDA)
+                .concluidaAluno(true)
+                .build();
+        rotinaTreino.setSessoes(new ArrayList<>(List.of(sessaoExecutada)));
+
+        Usuario usuarioAlunoNovo = Usuario.builder()
+                .id(UUID.randomUUID())
+                .nome("Novo Aluno")
+                .email("novo@gymnasion.com")
+                .role(Role.ALUNO)
+                .build();
+        Aluno alunoNovo = Aluno.builder()
+                .id(UUID.randomUUID())
+                .usuario(usuarioAlunoNovo)
+                .personal(personalTrainer)
+                .status(StatusConvite.ATIVO)
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaTreino.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(rotinaTreino));
+
+        VincularAlunosRotinaRequestDTO dto = new VincularAlunosRotinaRequestDTO(Set.of(alunoNovo.getId()));
+
+        assertThatThrownBy(() -> rotinaTreinoService.vincularAlunos(usuarioPersonal, rotinaTreino.getId(), dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Não é possível vincular novos alunos a uma rotina que já possui sessões executadas");
+    }
+
+    @Test
+    @DisplayName("US11/US25 Vincular turma: rotina com sessões já executadas é bloqueada")
+    void vincularTurma_rotinaComSessoesExecutadas_bloqueado() {
+        SessaoTreino sessaoExecutada = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .status(StatusSessaoTreino.CONCLUIDA)
+                .concluidaAluno(true)
+                .build();
+        rotinaTreino.setSessoes(new ArrayList<>(List.of(sessaoExecutada)));
+
+        Turma turma = Turma.builder()
+                .id(UUID.randomUUID())
+                .nome("Turma Corrida")
+                .personal(personalTrainer)
+                .modalidade(modalidade)
+                .alunos(new HashSet<>(Set.of(aluno)))
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaTreino.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(rotinaTreino));
+
+        assertThatThrownBy(() -> rotinaTreinoService.vincularTurma(usuarioPersonal, rotinaTreino.getId(), turma.getId()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Não é possível vincular novos alunos a uma rotina que já possui sessões executadas");
+    }
+
+    @Test
+    @DisplayName("US10 Registrar execução: Personal informa alunoId que não pertence aos alunos da rotina lança BusinessException")
+    void registrarExecucao_personalInformaAlunoNaoVinculadoARotina_bloqueado() {
+        UUID sessaoId = UUID.randomUUID();
+        SessaoTreino sessao = SessaoTreino.builder()
+                .id(sessaoId)
+                .rotinaTreino(rotinaTreino)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 10, 20))
+                .status(StatusSessaoTreino.PLANEJADA)
+                .build();
+
+        Aluno alunoNaoVinculado = Aluno.builder()
+                .id(UUID.randomUUID())
+                .usuario(Usuario.builder().id(UUID.randomUUID()).nome("Outro Aluno").build())
+                .personal(personalTrainer)
+                .status(StatusConvite.ATIVO)
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(sessaoTreinoRepository.findByIdAndPersonalTrainerId(sessaoId, personalTrainer.getId()))
+                .thenReturn(Optional.of(sessao));
+        when(alunoRepository.findByIdAndPersonalId(alunoNaoVinculado.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(alunoNaoVinculado));
+
+        RegistrarExecucaoSessaoRequestDTO dto = new RegistrarExecucaoSessaoRequestDTO(
+                LocalDate.of(2026, 10, 20),
+                50,
+                null,
+                alunoNaoVinculado.getId(),
+                List.of(new RegistrarResultadoMetricaDTO(metrica1.getId(), "00:30"))
+        );
+
+        assertThatThrownBy(() -> rotinaTreinoService.registrarExecucao(usuarioPersonal, sessaoId, dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("O aluno informado não está vinculado a esta rotina de treino.");
+    }
+
+    @Test
+    @DisplayName("US21 Consultar planejamento: Aluno consultando não enxerga desempenho pertencente a outro aluno")
+    void consultarPlanejamento_alunoVisualizando_naoVazaDesempenhoDeOutroAluno() {
+        Aluno outroAluno = Aluno.builder()
+                .id(UUID.randomUUID())
+                .usuario(Usuario.builder().id(UUID.randomUUID()).nome("Outro").build())
+                .personal(personalTrainer)
+                .status(StatusConvite.ATIVO)
+                .build();
+
+        rotinaTreino.getAlunos().add(outroAluno);
+
+        Desempenho desempenhoOutroAluno = Desempenho.builder()
+                .id(UUID.randomUUID())
+                .aluno(outroAluno)
+                .nivelCansaco(8)
+                .registradoPor("ALUNO")
+                .dataRegistro(OffsetDateTime.now())
+                .build();
+
+        SessaoTreino s1 = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .rotinaTreino(rotinaTreino)
+                .semana(1)
+                .dataPlanejada(LocalDate.now())
+                .status(StatusSessaoTreino.CONCLUIDA)
+                .desempenho(desempenhoOutroAluno)
+                .build();
+
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(rotinaTreinoRepository.findById(rotinaTreino.getId())).thenReturn(Optional.of(rotinaTreino));
+        when(sessaoTreinoRepository.findByRotinaTreinoIdOrderBySemanaAscDataPlanejadaAsc(rotinaTreino.getId()))
+                .thenReturn(List.of(s1));
+
+        PlanejamentoRotinaResponseDTO resp = rotinaTreinoService.consultarPlanejamento(usuarioAluno, rotinaTreino.getId(), LocalDate.now());
+
+        assertThat(resp).isNotNull();
+        assertThat(resp.semanas()).isNotEmpty();
+        SessaoTreinoResponseDTO sessaoRetornada = resp.semanas().get(0).sessoes().get(0);
+        assertThat(sessaoRetornada.desempenho()).isNull();
+    }
+
+    @Test
+    @DisplayName("US25 / RN-017 / US-19 C3: Reutilização de rotina não copia métricas descontinuadas")
+    void US25_reutilizarRotina_ignoraMetricasDescontinuadas() {
+        Metrica metricaDescontinuada = Metrica.builder()
+                .id(UUID.randomUUID())
+                .titulo("Métrica Obsoleta")
+                .tipo(TipoMetrica.NUMERICO)
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .ativo(false)
+                .build();
+        rotinaTreino.getMetricas().add(metricaDescontinuada);
+
+        ReutilizarRotinaRequestDTO dto = new ReutilizarRotinaRequestDTO(
+                aluno.getId(), LocalDate.of(2026, 11, 2), null, null
+        );
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaTreino.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(rotinaTreino));
+        when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(aluno));
+        when(rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(aluno.getId(), modalidade.getId())).thenReturn(false);
+
+        org.mockito.ArgumentCaptor<RotinaTreino> rotinaCaptor = org.mockito.ArgumentCaptor.forClass(RotinaTreino.class);
+        when(rotinaTreinoRepository.save(rotinaCaptor.capture())).thenAnswer(i -> i.getArgument(0));
+
+        rotinaTreinoService.reutilizarRotina(usuarioPersonal, rotinaTreino.getId(), dto);
+
+        RotinaTreino salva = rotinaCaptor.getValue();
+        assertThat(salva.getMetricas())
+                .extracting(Metrica::getTitulo)
+                .contains("Tempo 50m", "Braçadas")
+                .doesNotContain("Métrica Obsoleta");
+    }
+
+    @Test
+    @DisplayName("US21 C2: Obter formulário de execução bloqueia sessão de semana futura para aluno")
+    void US21_obterFormulario_bloqueiaSessaoDeSemanaFuturaParaAluno() {
+        UUID sessaoId = UUID.randomUUID();
+        LocalDate dataSemanaFutura = LocalDate.now().plusWeeks(2);
+        SessaoTreino sessao = SessaoTreino.builder()
+                .id(sessaoId)
+                .rotinaTreino(rotinaTreino)
+                .dataPlanejada(dataSemanaFutura)
+                .build();
+
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(sessaoTreinoRepository.findByIdAndAlunoId(sessaoId, aluno.getId())).thenReturn(Optional.of(sessao));
+
+        assertThatThrownBy(() -> rotinaTreinoService.obterFormularioExecucao(usuarioAluno, sessaoId))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Sessões de semanas futuras não estão disponíveis para execução.");
+    }
+
+    @Test
+    @DisplayName("US21 C2: Registrar execução bloqueia sessão de semana futura para aluno")
+    void US21_registrarExecucao_bloqueiaSessaoDeSemanaFuturaParaAluno() {
+        UUID sessaoId = UUID.randomUUID();
+        LocalDate dataSemanaFutura = LocalDate.now().plusWeeks(2);
+        SessaoTreino sessao = SessaoTreino.builder()
+                .id(sessaoId)
+                .rotinaTreino(rotinaTreino)
+                .dataPlanejada(dataSemanaFutura)
+                .build();
+
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(sessaoTreinoRepository.findByIdAndAlunoId(sessaoId, aluno.getId())).thenReturn(Optional.of(sessao));
+
+        RegistrarExecucaoSessaoRequestDTO dto = new RegistrarExecucaoSessaoRequestDTO(
+                dataSemanaFutura, 60, 5, null, List.of()
+        );
+
+        assertThatThrownBy(() -> rotinaTreinoService.registrarExecucao(usuarioAluno, sessaoId, dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Sessões de semanas futuras não estão disponíveis para execução.");
+    }
+
+    @Test
+    @DisplayName("US10: Personal trainer pode registrar execução mesmo em data futura sem bloqueio")
+    void US10_registrarExecucao_personalPodeRegistrarSessaoDeSemanaFutura() {
+        UUID sessaoId = UUID.randomUUID();
+        LocalDate dataFutura = LocalDate.now().plusWeeks(2);
+        SessaoTreino sessao = SessaoTreino.builder()
+                .id(sessaoId)
+                .rotinaTreino(rotinaTreino)
+                .dataPlanejada(dataFutura)
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(sessaoTreinoRepository.findByIdAndPersonalTrainerId(sessaoId, personalTrainer.getId()))
+                .thenReturn(Optional.of(sessao));
+        when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(aluno));
+        when(metricaRepository.findById(metrica1.getId())).thenReturn(Optional.of(metrica1));
+        when(sessaoTreinoRepository.save(any(SessaoTreino.class))).thenAnswer(i -> i.getArgument(0));
+
+        RegistrarExecucaoSessaoRequestDTO dto = new RegistrarExecucaoSessaoRequestDTO(
+                dataFutura, 60, 5, aluno.getId(), List.of(new RegistrarResultadoMetricaDTO(metrica1.getId(), "00:30"))
+        );
+
+        SessaoTreinoResponseDTO response = rotinaTreinoService.registrarExecucao(usuarioPersonal, sessaoId, dto);
+        assertThat(response).isNotNull();
     }
 }

@@ -256,4 +256,21 @@ class AuthServiceTest {
 
         verify(tokenService, never()).generateToken(any());
     }
+
+    @Test
+    @DisplayName("US02: Aluno com perfil sem entidade Aluno associada é impedido de logar")
+    void US02_alunoSemRegistroAluno_bloqueiaLogin() {
+        LoginRequestDTO dto = new LoginRequestDTO("lucas@aluno.com", "SenhaAluno1!");
+
+        when(loginAttemptService.isBlocked("lucas@aluno.com")).thenReturn(false);
+        when(userRepository.findByEmail("lucas@aluno.com")).thenReturn(Optional.of(usuarioAluno));
+        when(passwordEncoder.matches("SenhaAluno1!", "hash456")).thenReturn(true);
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.login(dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Cadastro de aluno não localizado ou revogado.");
+
+        verify(tokenService, never()).generateToken(any());
+    }
 }

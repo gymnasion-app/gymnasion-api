@@ -13,6 +13,8 @@ import com.gymnasion.tcc.exceptions.BusinessException;
 import com.gymnasion.tcc.repository.AlunoRepository;
 import com.gymnasion.tcc.repository.NotificacaoRepository;
 import com.gymnasion.tcc.repository.PersonalTrainerRepository;
+import com.gymnasion.tcc.repository.TermoAceiteRepository;
+import com.gymnasion.tcc.repository.UsuarioRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -40,6 +42,10 @@ class AlunoServiceTest {
     private AlunoRepository alunoRepository;
     @Mock
     private PersonalTrainerRepository personalTrainerRepository;
+    @Mock
+    private UsuarioRepository usuarioRepository;
+    @Mock
+    private TermoAceiteRepository termoAceiteRepository;
     @Mock
     private NotificacaoService notificacaoService;
     @Mock
@@ -96,6 +102,8 @@ class AlunoServiceTest {
 
         assertThat(response.mensagem()).isEqualTo("Aluno João Aluno foi recusado com sucesso!");
         verify(alunoRepository).delete(aluno);
+        verify(termoAceiteRepository).deleteByUsuario(aluno.getUsuario());
+        verify(usuarioRepository).delete(aluno.getUsuario());
         verify(notificacaoService).resolverSolicitacao(eq(personal), eq(aluno.getId()), anyBoolean());
 
         ArgumentCaptor<SolicitacaoAlunoAvaliadaEvent> eventCaptor = ArgumentCaptor.forClass(SolicitacaoAlunoAvaliadaEvent.class);
