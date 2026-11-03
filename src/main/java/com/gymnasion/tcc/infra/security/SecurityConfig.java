@@ -26,7 +26,7 @@ public class SecurityConfig {
 
     private final SecurityFilter securityFilter;
 
-    @Value("app.frontend.url")
+    @Value("${app.frontend.url:http://localhost:5173}")
     private String frontendUrl;
 
     public SecurityConfig(SecurityFilter securityFilter) {
@@ -36,9 +36,14 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(Arrays.asList(frontendUrl));
+        configuration.setAllowedOriginPatterns(Arrays.asList(
+                frontendUrl,
+                "http://localhost:[*]",
+                "http://127.0.0.1:[*]"
+        ));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList("Content-Type", "Authorization"));
+        configuration.setAllowedHeaders(Arrays.asList("*"));
+        configuration.setExposedHeaders(Arrays.asList("Authorization", "Content-Disposition"));
         configuration.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
