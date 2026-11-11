@@ -1,19 +1,24 @@
 package com.gymnasion.tcc.service;
 
 import com.gymnasion.tcc.domain.Aluno;
+import com.gymnasion.tcc.domain.Modalidade;
 import com.gymnasion.tcc.domain.Notificacao;
 import com.gymnasion.tcc.domain.PersonalTrainer;
 import com.gymnasion.tcc.domain.Usuario;
 import com.gymnasion.tcc.domain.enums.StatusConvite;
 import com.gymnasion.tcc.dto.AlunoResponseDTO;
+import com.gymnasion.tcc.dto.AtualizarModalidadesAlunoRequestDTO;
 import com.gymnasion.tcc.dto.MensagemResponseDTO;
 import com.gymnasion.tcc.event.SolicitacaoAlunoAvaliadaEvent;
 import com.gymnasion.tcc.event.SolicitacaoAlunoEmailListener;
 import com.gymnasion.tcc.exceptions.BusinessException;
 import com.gymnasion.tcc.repository.AlunoRepository;
+import com.gymnasion.tcc.repository.ModalidadeRepository;
 import com.gymnasion.tcc.repository.NotificacaoRepository;
 import com.gymnasion.tcc.repository.PersonalTrainerRepository;
+import com.gymnasion.tcc.repository.RotinaTreinoRepository;
 import com.gymnasion.tcc.repository.TermoAceiteRepository;
+import com.gymnasion.tcc.repository.TurmaRepository;
 import com.gymnasion.tcc.repository.UsuarioRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -50,6 +55,12 @@ class AlunoServiceTest {
     private NotificacaoService notificacaoService;
     @Mock
     private ApplicationEventPublisher eventPublisher;
+    @Mock
+    private ModalidadeRepository modalidadeRepository;
+    @Mock
+    private RotinaTreinoRepository rotinaTreinoRepository;
+    @Mock
+    private TurmaRepository turmaRepository;
 
     @InjectMocks
     private AlunoService alunoService;
@@ -74,6 +85,7 @@ class AlunoServiceTest {
 
         lenient().when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personal));
         lenient().when(alunoRepository.findById(aluno.getId())).thenReturn(Optional.of(aluno));
+        lenient().when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personal.getId())).thenReturn(Optional.of(aluno));
     }
 
     @Test
@@ -190,6 +202,107 @@ class AlunoServiceTest {
         assertThat(resultado.id()).isEqualTo(aluno.getId());
         assertThat(resultado.nomePersonal()).isEqualTo(usuarioPersonal.getNome());
         assertThat(resultado.usuario().email()).isEqualTo(usuarioAluno.getEmail());
+    }
+
+    @Test
+    @DisplayName("atualizarModalidades: adiciona segunda e terceira modalidade com sucesso")
+    void atualizarModalidades_adicionaSegundaETerceiraModalidade_sucesso() {
+        Modalidade natacao = Modalidade.builder().id(1L).nome("Natação").ativo(true).build();
+        Modalidade musculacao = Modalidade.builder().id(2L).nome("Musculação").ativo(true).build();
+        Modalidade corrida = Modalidade.builder().id(3L).nome("Corrida").ativo(true).build();
+        aluno.setModalidades(new HashSet<>(java.util.Set.of(natacao)));
+
+        when(modalidadeRepository.findById(1L)).thenReturn(Optional.of(natacao));
+        when(modalidadeRepository.findById(2L)).thenReturn(Optional.of(musculacao));
+        when(modalidadeRepository.findById(3L)).thenReturn(Optional.of(corrida));
+        when(alunoRepository.save(any(Aluno.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AlunoResponseDTO resultado = alunoService.atualizarModalidades(
+                aluno.getId(),
+                new AtualizarModalidadesAlunoRequestDTO(List.of(1L, 2L, 3L)),
+                usuarioPersonal
+        );
+
+        assertThat(resultado).isNotNull();
+        assertThat(aluno.getModalidades())
+                .extracting(Modalidade::getId)
+                .containsExactlyInAnyOrder(1L, 2L, 3L);
+    }
+
+    @Test
+    @DisplayName("atualizarModalidades: rejeita mais de 3 modalidades")
+    void atualizarModalidades_maisDeTresModalidades_lancaExcecao() {
+        assertThatThrownBy(() -> alunoService.atualizarModalidades(
+                aluno.getId(),
+                new AtualizarModalidadesAlunoRequestDTO(List.of(1L, 2L, 3L, 4L)),
+                usuarioPersonal
+        ))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("O aluno pode ter no máximo 3 modalidades vinculadas.");
+    }
+
+    @Test
+    @DisplayName("atualizarModalidades: bloqueia remoção de modalidade com rotina ativa")
+    void atualizarModalidades_removerModalidadeComRotinaAtiva_lancaBusinessException() {
+        Modalidade natacao = Modalidade.builder().id(1L).nome("Natação").ativo(true).build();
+        Modalidade musculacao = Modalidade.builder().id(2L).nome("Musculação").ativo(true).build();
+        aluno.setModalidades(new HashSet<>(java.util.Set.of(natacao, musculacao)));
+
+        when(modalidadeRepository.findById(2L)).thenReturn(Optional.of(musculacao));
+        when(rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(aluno.getId(), 1L)).thenReturn(true);
+
+        assertThatThrownBy(() -> alunoService.atualizarModalidades(
+                aluno.getId(),
+                new AtualizarModalidadesAlunoRequestDTO(List.of(2L)),
+                usuarioPersonal
+        ))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Não é possível remover a modalidade 'Natação' pois o aluno possui uma rotina ativa vinculada a ela.");
+    }
+
+    @Test
+    @DisplayName("atualizarModalidades: bloqueia remoção de modalidade com turma ativa")
+    void atualizarModalidades_removerModalidadeComTurmaAtiva_lancaBusinessException() {
+        Modalidade natacao = Modalidade.builder().id(1L).nome("Natação").ativo(true).build();
+        Modalidade musculacao = Modalidade.builder().id(2L).nome("Musculação").ativo(true).build();
+        aluno.setModalidades(new HashSet<>(java.util.Set.of(natacao, musculacao)));
+
+        when(modalidadeRepository.findById(2L)).thenReturn(Optional.of(musculacao));
+        when(rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(aluno.getId(), 1L)).thenReturn(false);
+        when(turmaRepository.existsByPersonalIdAndModalidadeIdAndAlunosId(
+                personal.getId(), 1L, aluno.getId())).thenReturn(true);
+
+        assertThatThrownBy(() -> alunoService.atualizarModalidades(
+                aluno.getId(),
+                new AtualizarModalidadesAlunoRequestDTO(List.of(2L)),
+                usuarioPersonal
+        ))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Não é possível remover a modalidade 'Natação' pois o aluno está vinculado a uma turma desta modalidade.");
+    }
+
+    @Test
+    @DisplayName("atualizarModalidades: permite remover modalidade quando não há rotina ativa nem turma")
+    void atualizarModalidades_removerModalidadeApenasComRotinaEncerrada_sucesso() {
+        Modalidade natacao = Modalidade.builder().id(1L).nome("Natação").ativo(true).build();
+        Modalidade musculacao = Modalidade.builder().id(2L).nome("Musculação").ativo(true).build();
+        aluno.setModalidades(new HashSet<>(java.util.Set.of(natacao, musculacao)));
+
+        when(modalidadeRepository.findById(2L)).thenReturn(Optional.of(musculacao));
+        when(rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(aluno.getId(), 1L)).thenReturn(false);
+        when(turmaRepository.existsByPersonalIdAndModalidadeIdAndAlunosId(personal.getId(), 1L, aluno.getId())).thenReturn(false);
+        when(alunoRepository.save(any(Aluno.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AlunoResponseDTO resultado = alunoService.atualizarModalidades(
+                aluno.getId(),
+                new AtualizarModalidadesAlunoRequestDTO(List.of(2L)),
+                usuarioPersonal
+        );
+
+        assertThat(resultado).isNotNull();
+        assertThat(aluno.getModalidades())
+                .extracting(Modalidade::getId)
+                .containsExactly(2L);
     }
 }
 

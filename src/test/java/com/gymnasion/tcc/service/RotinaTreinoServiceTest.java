@@ -99,15 +99,16 @@ class RotinaTreinoServiceTest {
                 .role(Role.ALUNO)
                 .build();
 
+        modalidade = Modalidade.builder()
+                .id(1L)
+                .nome("Natação")
+                .build();
+
         aluno = Aluno.builder()
                 .id(UUID.randomUUID())
                 .usuario(usuarioAluno)
                 .personal(personalTrainer)
-                .build();
-
-        modalidade = Modalidade.builder()
-                .id(1L)
-                .nome("Natação")
+                .modalidades(new HashSet<>(Set.of(modalidade)))
                 .build();
 
         metrica1 = Metrica.builder()
@@ -2078,6 +2079,7 @@ class RotinaTreinoServiceTest {
                 .usuario(usuarioAluno2)
                 .personal(personalTrainer)
                 .status(StatusConvite.ATIVO)
+                .modalidades(new HashSet<>(Set.of(modalidade)))
                 .build();
 
         RotinaTreino rotinaSemAlunos = RotinaTreino.builder()
@@ -2132,6 +2134,7 @@ class RotinaTreinoServiceTest {
                 .usuario(usuarioAluno2)
                 .personal(personalTrainer)
                 .status(StatusConvite.ATIVO)
+                .modalidades(new HashSet<>(Set.of(modalidade)))
                 .build();
 
         Turma turma = Turma.builder()
@@ -2228,6 +2231,7 @@ class RotinaTreinoServiceTest {
                 .usuario(usuarioAluno2)
                 .personal(personalTrainer)
                 .status(StatusConvite.ATIVO)
+                .modalidades(new HashSet<>(Set.of(modalidade)))
                 .build();
 
         Turma turma = Turma.builder()
@@ -2435,6 +2439,7 @@ class RotinaTreinoServiceTest {
                 .usuario(usuarioAluno2)
                 .personal(personalTrainer)
                 .status(StatusConvite.ATIVO)
+                .modalidades(new HashSet<>(Set.of(modalidade)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -2476,6 +2481,7 @@ class RotinaTreinoServiceTest {
                 .usuario(usuarioAluno2)
                 .personal(personalTrainer)
                 .status(StatusConvite.ATIVO)
+                .modalidades(new HashSet<>(Set.of(modalidade)))
                 .build();
 
         Turma turma = Turma.builder()
@@ -2768,5 +2774,90 @@ class RotinaTreinoServiceTest {
 
         SessaoTreinoResponseDTO response = rotinaTreinoService.registrarExecucao(usuarioPersonal, sessaoId, dto);
         assertThat(response).isNotNull();
+    }
+
+    @Test
+    @DisplayName("Atleta Híbrido: Permite criar segunda rotina ativa em modalidade diferente vinculada ao perfil")
+    void criarRotinaTreino_atletaHibridoComSegundaModalidade_sucesso() {
+        Modalidade musculacao = Modalidade.builder().id(2L).nome("Musculação").ativo(true).build();
+        aluno.getModalidades().add(musculacao);
+
+        Metrica metricaMusculacao = Metrica.builder()
+                .id(UUID.randomUUID())
+                .titulo("Carga Total")
+                .tipo(TipoMetrica.NUMERICO)
+                .modalidade(musculacao)
+                .personalTrainer(personalTrainer)
+                .ativo(true)
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(modalidadeRepository.findById(2L)).thenReturn(Optional.of(musculacao));
+        when(metricaRepository.findByPersonalTrainerIdAndModalidadeId(personalTrainer.getId(), 2L))
+                .thenReturn(List.of(metricaMusculacao));
+        when(metricaRepository.findByIdAndPersonalTrainerId(metricaMusculacao.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(metricaMusculacao));
+        when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(aluno));
+        when(rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(aluno.getId(), 2L))
+                .thenReturn(false);
+        when(rotinaTreinoRepository.save(any(RotinaTreino.class))).thenAnswer(inv -> {
+            RotinaTreino r = inv.getArgument(0);
+            r.setId(UUID.randomUUID());
+            return r;
+        });
+
+        CriarRotinaTreinoRequestDTO dto = new CriarRotinaTreinoRequestDTO(
+                "Força Complementar",
+                2L,
+                2,
+                "Suporte de força para natação",
+                Set.of(aluno.getId()),
+                Set.of(metricaMusculacao.getId())
+        );
+
+        RotinaTreinoResponseDTO response = rotinaTreinoService.criarRotinaTreino(usuarioPersonal, dto);
+
+        assertThat(response).isNotNull();
+        assertThat(response.modalidadeId()).isEqualTo(2L);
+        assertThat(response.titulo()).isEqualTo("Força Complementar");
+    }
+
+    @Test
+    @DisplayName("Atleta Híbrido: Bloqueia criação de rotina se aluno não possui a modalidade vinculada ao perfil")
+    void criarRotinaTreino_alunoSemModalidadeNoPerfil_lancaBusinessException() {
+        Modalidade corrida = Modalidade.builder().id(3L).nome("Corrida").ativo(true).build();
+        Metrica metricaCorrida = Metrica.builder()
+                .id(UUID.randomUUID())
+                .titulo("Pace")
+                .tipo(TipoMetrica.TEMPO)
+                .modalidade(corrida)
+                .personalTrainer(personalTrainer)
+                .ativo(true)
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(modalidadeRepository.findById(3L)).thenReturn(Optional.of(corrida));
+        when(metricaRepository.findByPersonalTrainerIdAndModalidadeId(personalTrainer.getId(), 3L))
+                .thenReturn(List.of(metricaCorrida));
+        when(metricaRepository.findByIdAndPersonalTrainerId(metricaCorrida.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(metricaCorrida));
+        when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(aluno));
+
+        CriarRotinaTreinoRequestDTO dto = new CriarRotinaTreinoRequestDTO(
+                "Rotina Corrida",
+                3L,
+                3,
+                "Resistência",
+                Set.of(aluno.getId()),
+                Set.of(metricaCorrida.getId())
+        );
+
+        assertThatThrownBy(() -> rotinaTreinoService.criarRotinaTreino(usuarioPersonal, dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("O aluno Aluno Lucas não possui a modalidade 'Corrida' vinculada ao seu perfil.");
+
+        verify(rotinaTreinoRepository, never()).save(any());
     }
 }

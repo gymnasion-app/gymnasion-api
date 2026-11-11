@@ -381,4 +381,70 @@ class AcompanhamentoTreinoServiceTest {
         assertThat(resumo.alunos().get(0).nomeAluno()).isEqualTo("Aluno Lucas");
         assertThat(resumo.alunos().get(0).quantidadePendencias()).isEqualTo(1);
     }
+
+    @Test
+    @DisplayName("Atleta Híbrido: obterAcompanhamentoAluno retorna todas as rotinas ativas em rotinasAtivas e soma pendências")
+    void obterAcompanhamentoAluno_atletaHibridoDuasRotinasAtivas_retornaTodasEmRotinasAtivasEAggregaPendencias() {
+        Modalidade musculacao = Modalidade.builder().id(2L).nome("Musculação").build();
+        Metrica metricaMusculacaoPersonal = Metrica.builder()
+                .id(UUID.randomUUID())
+                .titulo("Feedback Postural")
+                .tipo(TipoMetrica.TEXTO)
+                .modalidade(musculacao)
+                .personalTrainer(personalTrainer)
+                .quemPreenche(ResponsavelPreenchimento.PERSONAL)
+                .obrigatoria(true)
+                .build();
+
+        RotinaTreino rotinaMusculacao = RotinaTreino.builder()
+                .id(UUID.randomUUID())
+                .titulo("Força Base")
+                .modalidade(musculacao)
+                .personalTrainer(personalTrainer)
+                .frequenciaSemanal(2)
+                .ativo(true)
+                .alunos(new HashSet<>(Set.of(aluno)))
+                .metricas(new HashSet<>(Set.of(metricaMusculacaoPersonal)))
+                .build();
+
+        SessaoTreino sessaoNatacao = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .rotinaTreino(rotinaTreino)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 11, 10))
+                .status(StatusSessaoTreino.PLANEJADA)
+                .build();
+
+        SessaoTreino sessaoMusculacao = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .rotinaTreino(rotinaMusculacao)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 11, 11))
+                .status(StatusSessaoTreino.CONCLUIDA)
+                .concluidaAluno(true)
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(aluno));
+        when(rotinaTreinoRepository.findByPersonalTrainerIdAndAlunosId(personalTrainer.getId(), aluno.getId()))
+                .thenReturn(List.of(rotinaTreino, rotinaMusculacao));
+        when(sessaoTreinoRepository.findByRotinaTreinoIdOrderBySemanaAscDataPlanejadaAsc(rotinaTreino.getId()))
+                .thenReturn(List.of(sessaoNatacao));
+        when(sessaoTreinoRepository.findByRotinaTreinoIdOrderBySemanaAscDataPlanejadaAsc(rotinaMusculacao.getId()))
+                .thenReturn(List.of(sessaoMusculacao));
+        when(notificacaoRepository.findByUsuarioIdAndTipoAndReferenciaId(usuarioPersonal.getId(), TipoNotificacao.METRICAS_PENDENTES, aluno.getId()))
+                .thenReturn(Optional.empty());
+
+        AcompanhamentoAlunoResponseDTO response = acompanhamentoTreinoService.obterAcompanhamentoAluno(usuarioPersonal, aluno.getId());
+
+        assertThat(response.rotinaAtivaId()).isEqualTo(rotinaTreino.getId());
+        assertThat(response.rotinasAtivas()).hasSize(2);
+        assertThat(response.rotinasAtivas()).extracting(AcompanhamentoAlunoResponseDTO.RotinaAtivaAcompanhamentoDTO::modalidadeNome)
+                .containsExactly("Natação", "Musculação");
+
+        ArgumentCaptor<Notificacao> notifCaptor = ArgumentCaptor.forClass(Notificacao.class);
+        verify(notificacaoRepository).save(notifCaptor.capture());
+        assertThat(notifCaptor.getValue().getMensagem()).contains("2 métrica(s) pendente(s)");
+    }
 }

@@ -6,6 +6,8 @@ import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 
 @Entity
@@ -28,8 +30,17 @@ public class PersonalConvites {
     private UUID personalId;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "modalidade_id", nullable = false)
+    @JoinColumn(name = "modalidade_id", nullable = true)
     private Modalidade modalidade;
+
+    @Builder.Default
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(
+            name = "personal_convites_modalidades",
+            joinColumns = @JoinColumn(name = "convite_id"),
+            inverseJoinColumns = @JoinColumn(name = "modalidade_id")
+    )
+    private Set<Modalidade> modalidades = new HashSet<>();
 
     @Column(nullable = false, length = 20)
     @Builder.Default

@@ -35,6 +35,7 @@ public class Aluno {
     @Column(name = "status", nullable = false, length = 20)
     private StatusConvite status = StatusConvite.PENDENTE;
 
+    @Builder.Default
     @ManyToMany
     @JoinTable(
             name = "praticada",

@@ -25,7 +25,9 @@ import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -54,12 +56,28 @@ public class PersonalConviteService {
         PersonalTrainer personalTrainer = personalTrainerRepository.getByUsuario(usuario)
                 .orElseThrow(() -> new UsernameNotFoundException("Personal não encontrado!"));
 
-        Modalidade modalidade = modalidadeRepository.findById(dto.modalidadeId())
-                .orElseThrow(() -> new UsernameNotFoundException("Modalidade não encontrada!"));
-
-        if (Boolean.FALSE.equals(modalidade.getAtivo())) {
-            throw new BusinessException("Esta modalidade está desativada e não pode receber novos convites.");
+        List<Long> ids = dto.resolverModalidadesIds();
+        if (ids.isEmpty()) {
+            throw new BusinessException("Selecione pelo menos uma modalidade esportiva.");
         }
+        if (ids.size() > 3) {
+            throw new BusinessException("O aluno pode ter no máximo 3 modalidades vinculadas.");
+        }
+
+        List<Modalidade> modalidadesList = new ArrayList<>();
+        for (Long modId : ids) {
+            Modalidade modalidade = modalidadeRepository.findById(modId)
+                    .orElseThrow(() -> new NotFoundException("Modalidade não encontrada."));
+            if (Boolean.FALSE.equals(modalidade.getAtivo())) {
+                throw new BusinessException("Esta modalidade está desativada e não pode receber novos convites.");
+            }
+            modalidadesList.add(modalidade);
+        }
+
+        Modalidade modalidadePrincipal = modalidadesList.getFirst();
+        String nomesModalidades = modalidadesList.stream()
+                .map(Modalidade::getNome)
+                .collect(Collectors.joining(", "));
 
         String token = UUID.randomUUID().toString();
 
@@ -67,7 +85,8 @@ public class PersonalConviteService {
                 .token(token)
                 .personalId(personalTrainer.getId())
                 .status(StatusConvite.ATIVO)
-                .modalidade(modalidade)
+                .modalidade(modalidadePrincipal)
+                .modalidades(new LinkedHashSet<>(modalidadesList))
                 .maximoUsuarios(30)
                 .quantidadesUsuarios(0)
                 .dataExpiracao(LocalDateTime.now().plusMinutes(15))
@@ -80,7 +99,7 @@ public class PersonalConviteService {
         String emailEnviado = null;
         if (dto.emailAluno() != null && !dto.emailAluno().trim().isBlank()) {
             emailEnviado = dto.emailAluno().trim().toLowerCase();
-            eventPublisher.publishEvent(new ConviteAlunoCriadoEvent(emailEnviado, usuario.getNome(), modalidade.getNome(), fullUrl));
+            eventPublisher.publishEvent(new ConviteAlunoCriadoEvent(emailEnviado, usuario.getNome(), nomesModalidades, fullUrl));
         }
 
         return new ConviteResponseDTO(fullUrl, emailEnviado);
@@ -135,14 +154,21 @@ public class PersonalConviteService {
                 .build();
         termoAceiteRepository.save(termoAceite);
 
-        Set<Modalidade> modalidades = new HashSet<>();
-        modalidades.add(convite.getModalidade());
+        Set<Modalidade> modalidadesConvite = (convite.getModalidades() != null && !convite.getModalidades().isEmpty())
+                ? new HashSet<>(convite.getModalidades())
+                : (convite.getModalidade() != null ? new HashSet<>(Set.of(convite.getModalidade())) : new HashSet<>());
+
+        for (Modalidade m : modalidadesConvite) {
+            if (Boolean.FALSE.equals(m.getAtivo())) {
+                throw new BusinessException("A modalidade '" + m.getNome() + "' está desativada e não permite novos cadastros.");
+            }
+        }
 
         Aluno aluno = Aluno.builder()
                 .usuario(usuario)
                 .personal(personal)
                 .status(StatusConvite.PENDENTE)
-                .modalidades(modalidades)
+                .modalidades(modalidadesConvite)
                 .build();
 
         aluno = alunoRepository.save(aluno);

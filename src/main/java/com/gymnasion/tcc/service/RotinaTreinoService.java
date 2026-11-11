@@ -41,6 +41,16 @@ public class RotinaTreinoService {
 
     private static final java.time.ZoneId ZONE_BRASIL = java.time.ZoneId.of("America/Sao_Paulo");
 
+    private void validarModalidadeVinculadaAoAluno(Aluno aluno, Modalidade modalidade) {
+        if (modalidade == null) {
+            return;
+        }
+        if (aluno.getModalidades() == null || aluno.getModalidades().stream().noneMatch(m -> m.getId().equals(modalidade.getId()))) {
+            String nome = aluno.getUsuario() != null ? aluno.getUsuario().getNome() : "selecionado";
+            throw new BusinessException("O aluno " + nome + " não possui a modalidade '" + modalidade.getNome() + "' vinculada ao seu perfil.");
+        }
+    }
+
     /**
      * US-21 C2: Impede que alunos acessem o formulário ou registrem sessões pertencentes a semanas futuras.
      */
@@ -98,6 +108,8 @@ public class RotinaTreinoService {
             if (aluno.getStatus() == StatusConvite.INATIVO) {
                 throw new BusinessException("Erro. Este aluno está inativo.");
             }
+
+            validarModalidadeVinculadaAoAluno(aluno, modalidade);
 
             // Trava de 1 rotina ativa (US-11 / US-25 C6) - por modalidade
             if (rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(aluno.getId(), modalidade.getId())) {
@@ -215,6 +227,8 @@ public class RotinaTreinoService {
                 throw new BusinessException("Erro. Este aluno está inativo.");
             }
 
+            validarModalidadeVinculadaAoAluno(aluno, rotina.getModalidade());
+
             // Trava de 1 rotina ativa na mesma modalidade, ignorando a própria rotina sendo atualizada
             if (rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrueAndIdNot(aluno.getId(), rotina.getModalidade().getId(), rotina.getId())) {
                 String nome = aluno.getUsuario() != null ? aluno.getUsuario().getNome() : "selecionado";
@@ -324,6 +338,8 @@ public class RotinaTreinoService {
                 throw new BusinessException("Esse aluno já possui o treino vinculado.");
             }
 
+            validarModalidadeVinculadaAoAluno(aluno, rotina.getModalidade());
+
             // Trava de 1 rotina ativa (US-11 / US-25 C6) - por modalidade
             if (rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrueAndIdNot(aluno.getId(), rotina.getModalidade().getId(), rotina.getId())) {
                 String nome = aluno.getUsuario() != null ? aluno.getUsuario().getNome() : "selecionado";
@@ -391,6 +407,8 @@ public class RotinaTreinoService {
             if (jaVinculado) {
                 continue;
             }
+
+            validarModalidadeVinculadaAoAluno(aluno, rotina.getModalidade());
 
             // Trava de 1 rotina ativa na mesma modalidade (US-11 / US-25 C6)
             boolean possuiConflito = rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrueAndIdNot(
@@ -545,6 +563,8 @@ public class RotinaTreinoService {
         if (aluno.getStatus() == StatusConvite.INATIVO) {
             throw new BusinessException("Erro. Este aluno está inativo.");
         }
+
+        validarModalidadeVinculadaAoAluno(aluno, rotinaOrigem.getModalidade());
 
         // US-25 C6: Máximo de 1 rotina ativa por aluno na modalidade
         if (rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(aluno.getId(), rotinaOrigem.getModalidade().getId())) {
