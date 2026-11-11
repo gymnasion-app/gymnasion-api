@@ -16,5 +16,9 @@ public interface ModalidadeRepository extends JpaRepository<Modalidade, Long> {
 
     List<Modalidade> findByAtivoTrue();
 
+    List<Modalidade> findByAtivoTrueOrderByNomeAsc();
+
+    List<Modalidade> findAllByOrderByNomeAsc();
+
     Page<Modalidade> findByAtivoTrue(Pageable pageable);
 }

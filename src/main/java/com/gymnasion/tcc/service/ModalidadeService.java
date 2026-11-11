@@ -8,7 +8,9 @@ import com.gymnasion.tcc.exceptions.NotFoundException;
 import com.gymnasion.tcc.repository.ModalidadeRepository;
 import lombok.AllArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,15 +29,19 @@ public class ModalidadeService {
 
     @Transactional(readOnly = true)
     public Page<ModalidadeResponseDTO> listarTodas(Pageable pageable, boolean apenasAtivas) {
+        Pageable ordenado = pageable.getSort().isSorted()
+                ? pageable
+                : PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.ASC, "nome"));
+
         if (apenasAtivas) {
-            return modalidadeRepository.findByAtivoTrue(pageable).map(this::toDTO);
+            return modalidadeRepository.findByAtivoTrue(ordenado).map(this::toDTO);
         }
-        return modalidadeRepository.findAll(pageable).map(this::toDTO);
+        return modalidadeRepository.findAll(ordenado).map(this::toDTO);
     }
 
     @Transactional(readOnly = true)
     public List<ModalidadeResponseDTO> listarTodas() {
-        return modalidadeRepository.findByAtivoTrue()
+        return modalidadeRepository.findByAtivoTrueOrderByNomeAsc()
                 .stream()
                 .map(this::toDTO)
                 .toList();

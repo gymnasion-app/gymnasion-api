@@ -16,6 +16,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 
 import java.util.List;
 import java.util.Optional;
@@ -35,32 +36,62 @@ class ModalidadeServiceTest {
     private ModalidadeService modalidadeService;
 
     @Test
-    @DisplayName("Listar apenas ativas com paginação")
+    @DisplayName("Listar apenas ativas com paginação aplica ordem alfabética por padrão quando sem ordenação")
     void listarApenasAtivasComPaginacao() {
         Pageable pageable = PageRequest.of(0, 10);
+        Pageable expectedPageable = PageRequest.of(0, 10, Sort.by(Sort.Direction.ASC, "nome"));
         Modalidade m = Modalidade.builder().id(1L).nome("Corrida").ativo(true).build();
-        when(modalidadeRepository.findByAtivoTrue(pageable)).thenReturn(new PageImpl<>(List.of(m)));
+        when(modalidadeRepository.findByAtivoTrue(expectedPageable)).thenReturn(new PageImpl<>(List.of(m)));
 
         Page<ModalidadeResponseDTO> result = modalidadeService.listarTodas(pageable, true);
 
         assertThat(result.getContent()).hasSize(1);
         assertThat(result.getContent().get(0).nome()).isEqualTo("Corrida");
         assertThat(result.getContent().get(0).ativo()).isTrue();
-        verify(modalidadeRepository).findByAtivoTrue(pageable);
+        verify(modalidadeRepository).findByAtivoTrue(expectedPageable);
     }
 
     @Test
-    @DisplayName("Listar todas incluindo inativas quando apenasAtivas=false")
+    @DisplayName("Listar todas incluindo inativas quando apenasAtivas=false aplica ordem alfabética por padrão")
     void listarTodasIncluindoInativas() {
         Pageable pageable = PageRequest.of(0, 10);
+        Pageable expectedPageable = PageRequest.of(0, 10, Sort.by(Sort.Direction.ASC, "nome"));
         Modalidade m1 = Modalidade.builder().id(1L).nome("Corrida").ativo(true).build();
         Modalidade m2 = Modalidade.builder().id(2L).nome("Crossfit").ativo(false).build();
-        when(modalidadeRepository.findAll(pageable)).thenReturn(new PageImpl<>(List.of(m1, m2)));
+        when(modalidadeRepository.findAll(expectedPageable)).thenReturn(new PageImpl<>(List.of(m1, m2)));
 
         Page<ModalidadeResponseDTO> result = modalidadeService.listarTodas(pageable, false);
 
         assertThat(result.getContent()).hasSize(2);
-        verify(modalidadeRepository).findAll(pageable);
+        verify(modalidadeRepository).findAll(expectedPageable);
+    }
+
+    @Test
+    @DisplayName("Listar todas sem paginação retorna ativas em ordem alfabética")
+    void listarTodasSemPaginacaoEmOrdemAlfabetica() {
+        Modalidade m1 = Modalidade.builder().id(1L).nome("Boxe").ativo(true).build();
+        Modalidade m2 = Modalidade.builder().id(2L).nome("Wrestling").ativo(true).build();
+        when(modalidadeRepository.findByAtivoTrueOrderByNomeAsc()).thenReturn(List.of(m1, m2));
+
+        List<ModalidadeResponseDTO> result = modalidadeService.listarTodas();
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).nome()).isEqualTo("Boxe");
+        assertThat(result.get(1).nome()).isEqualTo("Wrestling");
+        verify(modalidadeRepository).findByAtivoTrueOrderByNomeAsc();
+    }
+
+    @Test
+    @DisplayName("Listar com ordenação explícita preserva a ordenação fornecida")
+    void listarComPaginacaoPreservaOrdenacao() {
+        Pageable pageable = PageRequest.of(0, 10, Sort.by(Sort.Direction.DESC, "nome"));
+        Modalidade m = Modalidade.builder().id(1L).nome("Wrestling").ativo(true).build();
+        when(modalidadeRepository.findByAtivoTrue(pageable)).thenReturn(new PageImpl<>(List.of(m)));
+
+        Page<ModalidadeResponseDTO> result = modalidadeService.listarTodas(pageable, true);
+
+        assertThat(result.getContent()).hasSize(1);
+        verify(modalidadeRepository).findByAtivoTrue(pageable);
     }
 
     @Test
