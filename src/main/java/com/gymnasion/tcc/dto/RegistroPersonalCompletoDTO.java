@@ -30,6 +30,9 @@ public record RegistroPersonalCompletoDTO(
     @NotNull(message = "A modalidade é obrigatória")
     Long modalidade,
 
-    Boolean aceitouTermos
+    Boolean aceitouTermos,
+
+    @NotBlank(message = "Conclua a verificação CAPTCHA.")
+    String captchaToken
 ){
 }

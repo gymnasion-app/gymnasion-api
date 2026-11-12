@@ -3,6 +3,7 @@ package com.gymnasion.tcc.controller;
 import com.gymnasion.tcc.dto.*;
 import com.gymnasion.tcc.service.AuthService;
 import com.gymnasion.tcc.service.PersonalConviteService;
+import com.gymnasion.tcc.service.RecaptchaService;
 import com.gymnasion.tcc.service.UsuarioService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -22,13 +23,15 @@ public class AuthController {
     private final UsuarioService userService;
     private final AuthService authService;
     private final PersonalConviteService conviteService;
+    private final RecaptchaService recaptchaService;
 
     @PostMapping("/registro-personal")
     @Operation(summary = "Registar novo Personal Trainer (US-01)", description = "Cria a conta do treinador e associa a sua modalidade principal.")
     @ApiResponse(responseCode = "201", description = "Treinador registado com sucesso.")
-    @ApiResponse(responseCode = "400", description = "Dados de entrada inválidos.")
+    @ApiResponse(responseCode = "400", description = "Dados de entrada inválidos ou CAPTCHA inválido.")
     @ApiResponse(responseCode = "409", description = "E-mail ou CPF já registado na plataforma.")
     public ResponseEntity<UsuarioResponseDTO> registrarPersonal(@Valid @RequestBody RegistroPersonalCompletoDTO dto) {
+        recaptchaService.verificar(dto.captchaToken());
         UsuarioResponseDTO response = userService.criarPersonal(dto);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
@@ -41,6 +44,17 @@ public class AuthController {
     public ResponseEntity<TokenResponseDTO> login(@Valid @RequestBody LoginRequestDTO dto) {
         TokenResponseDTO response = authService.login(dto);
         return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/login-web")
+    @Operation(summary = "Autenticar personal na área web com reCAPTCHA (US-02)", description = "Mesmo fluxo de /auth/login, mas exige o token do Google reCAPTCHA v2 validado no servidor antes de conferir as credenciais. O app mobile continua usando /auth/login.")
+    @ApiResponse(responseCode = "200", description = "Autenticação realizada com sucesso.")
+    @ApiResponse(responseCode = "400", description = "CAPTCHA ausente, inválido ou expirado.")
+    @ApiResponse(responseCode = "401", description = "E-mail ou senha inválidos (US-02 C3).")
+    @ApiResponse(responseCode = "422", description = "Conta temporariamente bloqueada (RN-010) ou aluno inativo (RN-014).")
+    public ResponseEntity<TokenResponseDTO> loginWeb(@Valid @RequestBody LoginWebRequestDTO dto) {
+        recaptchaService.verificar(dto.captchaToken());
+        return ResponseEntity.ok(authService.login(dto.toLoginRequest()));
     }
 
     @PostMapping("/registro-aluno-convite")
