@@ -11,6 +11,7 @@ import lombok.AllArgsConstructor;
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -25,9 +26,9 @@ public class ModalidadeController {
     private final ModalidadeService modalidadeService;
 
     @GetMapping
-    @Operation(summary = "Listar modalidades", description = "Retorna a lista de modalidades desportivas disponíveis de forma paginada. Acesso livre.")
+    @Operation(summary = "Listar modalidades", description = "Retorna a lista de modalidades desportivas disponíveis de forma paginada e em ordem alfabética. Acesso livre.")
     public ResponseEntity<PageResponseDTO<ModalidadeResponseDTO>> listarTodas(
-            @ParameterObject @PageableDefault(size = 10) Pageable pageable,
+            @ParameterObject @PageableDefault(size = 10, sort = "nome", direction = Sort.Direction.ASC) Pageable pageable,
             @RequestParam(value = "apenasAtivas", required = false, defaultValue = "true") boolean apenasAtivas) {
         return ResponseEntity.ok(PageResponseDTO.from(modalidadeService.listarTodas(pageable, apenasAtivas)));
     }

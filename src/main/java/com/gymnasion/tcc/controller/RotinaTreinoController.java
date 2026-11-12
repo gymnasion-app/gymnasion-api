@@ -8,6 +8,8 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.AllArgsConstructor;
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Pageable;
@@ -16,11 +18,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
 
 @RestController
+@Validated
 @RequestMapping("/personal-trainers/rotinas")
 @AllArgsConstructor
 @PreAuthorize("hasRole('PERSONAL_TRAINER')")
@@ -31,9 +35,9 @@ public class RotinaTreinoController {
     private final RotinaTreinoService rotinaTreinoService;
 
     @PostMapping
-    @Operation(summary = "Cadastrar rotina de treino (US-09)", description = "Cria uma nova rotina de treino vinculando modalidade, métricas personalizadas e alunos.")
+    @Operation(summary = "Cadastrar rotina de treino (US-09)", description = "Cria uma nova rotina de treino vinculando modalidade e alunos.")
     @ApiResponse(responseCode = "201", description = "Treino criado com sucesso!")
-    @ApiResponse(responseCode = "400", description = "Campos obrigatórios ausentes, frequência inválida ou sem métricas cadastradas.")
+    @ApiResponse(responseCode = "400", description = "Campos obrigatórios ausentes ou frequência inválida.")
     public ResponseEntity<RotinaTreinoResponseDTO> criarRotina(
             @AuthenticationPrincipal Usuario usuario,
             @Valid @RequestBody CriarRotinaTreinoRequestDTO dto) {
@@ -67,7 +71,7 @@ public class RotinaTreinoController {
     }
 
     @PutMapping("/{id}")
-    @Operation(summary = "Atualizar rotina de treino", description = "Atualiza título, frequência, objetivos, métricas e alunos vinculados da rotina sem conflitar com os alunos já pertencentes a ela.")
+    @Operation(summary = "Atualizar rotina de treino", description = "Atualiza título, frequência, objetivos e alunos vinculados da rotina sem conflitar com os alunos já pertencentes a ela.")
     @ApiResponse(responseCode = "200", description = "Rotina atualizada com sucesso.")
     @ApiResponse(responseCode = "400", description = "Dados inválidos ou aluno com rotina ativa em outra rotina da mesma modalidade.")
     @ApiResponse(responseCode = "404", description = "Rotina de treino não encontrada.")
@@ -189,14 +193,38 @@ public class RotinaTreinoController {
     }
 
     @PutMapping("/sessoes/{sessaoId}")
-    @Operation(summary = "Editar sessão futura (US-10 C2)", description = "Atualiza o planejamento de uma sessão não executada. Bloqueia a edição se a sessão já estiver concluída/executada.")
-    @ApiResponse(responseCode = "200", description = "Sessão futura atualizada com sucesso.")
+    @Operation(summary = "Editar sessão planejada (US-10 C2)", description = "Atualiza o planejamento e métricas vinculadas de uma sessão não executada. Bloqueia a edição se a sessão já estiver concluída/executada.")
+    @ApiResponse(responseCode = "200", description = "Sessão planejada atualizada com sucesso.")
     @ApiResponse(responseCode = "422", description = "Não é possível editar uma sessão já executada.")
     public ResponseEntity<SessaoTreinoResponseDTO> editarSessaoFutura(
             @AuthenticationPrincipal Usuario usuario,
             @PathVariable("sessaoId") UUID sessaoId,
             @Valid @RequestBody AtualizarSessaoTreinoRequestDTO dto) {
         return ResponseEntity.ok(rotinaTreinoService.editarSessaoFutura(usuario, sessaoId, dto));
+    }
+
+    @PostMapping("/sessoes/{sessaoId}/duplicar")
+    @Operation(summary = "Duplicar sessão de treino (US-10)", description = "Cria uma nova sessão com status PLANEJADA copiando duração, atividades e métricas ativas da sessão de origem.")
+    @ApiResponse(responseCode = "201", description = "Sessão duplicada com sucesso.")
+    @ApiResponse(responseCode = "422", description = "Rotina encerrada ou dados inválidos.")
+    public ResponseEntity<SessaoTreinoResponseDTO> duplicarSessao(
+            @AuthenticationPrincipal Usuario usuario,
+            @PathVariable("sessaoId") UUID sessaoId,
+            @Valid @RequestBody DuplicarSessaoTreinoRequestDTO dto) {
+        SessaoTreinoResponseDTO response = rotinaTreinoService.duplicarSessao(usuario, sessaoId, dto);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @PostMapping("/{id}/semanas/{semanaOrigem}/duplicar")
+    @Operation(summary = "Duplicar semana de planejamento (US-10)", description = "Clona todas as sessões da semana de origem para a semana seguinte (N -> N+1), somando +7 dias nas datas planejadas e mantendo eventuais sessões já existentes no destino.")
+    @ApiResponse(responseCode = "201", description = "Semana duplicada com sucesso.")
+    @ApiResponse(responseCode = "422", description = "Semana de origem sem sessões ou rotina encerrada.")
+    public ResponseEntity<PlanejamentoRotinaResponseDTO> duplicarSemana(
+            @AuthenticationPrincipal Usuario usuario,
+            @PathVariable("id") UUID rotinaId,
+            @PathVariable("semanaOrigem") @Min(1) @Max(103) Integer semanaOrigem) {
+        PlanejamentoRotinaResponseDTO response = rotinaTreinoService.duplicarSemana(usuario, rotinaId, semanaOrigem);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     @PostMapping("/sessoes/{sessaoId}/execucao")

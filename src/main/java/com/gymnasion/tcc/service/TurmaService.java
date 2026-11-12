@@ -57,6 +57,7 @@ public class TurmaService {
             if (aluno.getStatus() == StatusConvite.INATIVO) {
                 throw new BusinessException("Erro. Este aluno está inativo.");
             }
+            validarModalidadeVinculadaAoAluno(aluno, modalidade);
             alunosValidados.add(aluno);
         }
 
@@ -109,6 +110,12 @@ public class TurmaService {
             throw new BusinessException("Não é possível vincular uma modalidade desativada à turma.");
         }
 
+        if (turma.getAlunos() != null && (turma.getModalidade() == null || !turma.getModalidade().getId().equals(modalidade.getId()))) {
+            for (Aluno alunoExistente : turma.getAlunos()) {
+                validarModalidadeVinculadaAoAluno(alunoExistente, modalidade);
+            }
+        }
+
         turma.setNome(dto.nome().trim());
         turma.setModalidade(modalidade);
         turma.setHorario(dto.horario());
@@ -129,6 +136,8 @@ public class TurmaService {
         if (aluno.getStatus() == StatusConvite.INATIVO) {
             throw new BusinessException("Erro. Este aluno está inativo.");
         }
+
+        validarModalidadeVinculadaAoAluno(aluno, turma.getModalidade());
 
         boolean jaPertence = turma.getAlunos().stream()
                 .anyMatch(a -> a.getId().equals(aluno.getId()));
@@ -198,6 +207,16 @@ public class TurmaService {
         }
 
         return new MensagemResponseDTO("Aluno removido com sucesso!");
+    }
+
+    private void validarModalidadeVinculadaAoAluno(Aluno aluno, Modalidade modalidade) {
+        if (modalidade == null) {
+            return;
+        }
+        if (aluno.getModalidades() == null || aluno.getModalidades().stream().noneMatch(m -> m.getId().equals(modalidade.getId()))) {
+            String nome = aluno.getUsuario() != null ? aluno.getUsuario().getNome() : "selecionado";
+            throw new BusinessException("O aluno " + nome + " não possui a modalidade '" + modalidade.getNome() + "' vinculada ao seu perfil.");
+        }
     }
 
     private PersonalTrainer obterPersonalLogado(Usuario usuario) {

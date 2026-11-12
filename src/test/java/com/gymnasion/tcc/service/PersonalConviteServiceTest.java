@@ -23,7 +23,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 import com.gymnasion.tcc.event.ConviteAlunoCriadoEvent;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -217,5 +219,89 @@ class PersonalConviteServiceTest {
                 .hasMessage("A senha deve conter no mínimo 8 caracteres, incluindo letra maiúscula, minúscula, número e caractere especial.");
 
         verifyNoInteractions(personalConviteRepository, usuarioRepository, alunoRepository, termoAceiteRepository);
+    }
+
+    @Test
+    @DisplayName("Atleta híbrido: gerarLinkConvite permite até 3 modalidades e registra nomes no evento")
+    void gerarLinkConvite_comTresModalidades_sucesso() {
+        Modalidade m1 = modalidade;
+        Modalidade m2 = Modalidade.builder().id(2L).nome("Musculação").ativo(true).build();
+        Modalidade m3 = Modalidade.builder().id(3L).nome("Corrida").ativo(true).build();
+
+        GerarConviteRequestDTO dto = new GerarConviteRequestDTO(
+                null,
+                List.of(1L, 2L, 3L),
+                "hibrido@teste.com"
+        );
+
+        when(personalTrainerRepository.getByUsuario(personalUsuario)).thenReturn(Optional.of(personalTrainer));
+        when(modalidadeRepository.findById(1L)).thenReturn(Optional.of(m1));
+        when(modalidadeRepository.findById(2L)).thenReturn(Optional.of(m2));
+        when(modalidadeRepository.findById(3L)).thenReturn(Optional.of(m3));
+        when(personalConviteRepository.save(any(PersonalConvites.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ConviteResponseDTO response = personalConviteService.gerarLinkConvite(personalUsuario, dto);
+
+        assertThat(response).isNotNull();
+
+        ArgumentCaptor<PersonalConvites> conviteCaptor = ArgumentCaptor.forClass(PersonalConvites.class);
+        verify(personalConviteRepository).save(conviteCaptor.capture());
+        assertThat(conviteCaptor.getValue().getModalidades())
+                .extracting(Modalidade::getId)
+                .containsExactlyInAnyOrder(1L, 2L, 3L);
+
+        ArgumentCaptor<ConviteAlunoCriadoEvent> eventCaptor = ArgumentCaptor.forClass(ConviteAlunoCriadoEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().nomeModalidade()).contains("Natação", "Musculação", "Corrida");
+    }
+
+    @Test
+    @DisplayName("Atleta híbrido: gerarLinkConvite rejeita mais de 3 modalidades")
+    void gerarLinkConvite_comMaisDeTresModalidades_lancaBusinessException() {
+        GerarConviteRequestDTO dto = new GerarConviteRequestDTO(
+                null,
+                List.of(1L, 2L, 3L, 4L),
+                "muitos@teste.com"
+        );
+
+        when(personalTrainerRepository.getByUsuario(personalUsuario)).thenReturn(Optional.of(personalTrainer));
+
+        assertThatThrownBy(() -> personalConviteService.gerarLinkConvite(personalUsuario, dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("O aluno pode ter no máximo 3 modalidades vinculadas.");
+
+        verifyNoInteractions(personalConviteRepository);
+    }
+
+    @Test
+    @DisplayName("Atleta híbrido: registroAlunoConvite vincula todas as modalidades do convite ao novo aluno")
+    void registroAlunoConvite_vinculaTodasModalidadesDoConvite() {
+        Modalidade m2 = Modalidade.builder().id(2L).nome("Musculação").ativo(true).build();
+        conviteAtivo.setModalidades(new java.util.HashSet<>(Set.of(modalidade, m2)));
+
+        UsuarioRequestDTO dto = new UsuarioRequestDTO(
+                "Atleta Híbrido",
+                "aluno@teste.com",
+                "SenhaForte@123",
+                "111.222.333-44",
+                "11999990000",
+                true
+        );
+
+        when(personalConviteRepository.findByToken("valid-token")).thenReturn(Optional.of(conviteAtivo));
+        when(personalTrainerRepository.getById(personalTrainer.getId())).thenReturn(personalTrainer);
+        when(usuarioRepository.findByEmail("aluno@teste.com")).thenReturn(Optional.empty());
+        when(usuarioRepository.existsByCpf("11122233344")).thenReturn(false);
+        when(passwordEncoder.encode(any())).thenReturn("encoded");
+        when(usuarioRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(alunoRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        personalConviteService.registroAlunoConvite(dto, "valid-token");
+
+        ArgumentCaptor<Aluno> alunoCaptor = ArgumentCaptor.forClass(Aluno.class);
+        verify(alunoRepository).save(alunoCaptor.capture());
+        assertThat(alunoCaptor.getValue().getModalidades())
+                .extracting(Modalidade::getId)
+                .containsExactlyInAnyOrder(1L, 2L);
     }
 }

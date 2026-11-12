@@ -34,18 +34,78 @@ public class AcompanhamentoTreinoService {
         Aluno aluno = alunoRepository.findByIdAndPersonalId(alunoId, personal.getId())
                 .orElseThrow(() -> new NotFoundException("Aluno não encontrado ou não pertence a este Personal Trainer."));
 
-        // Busca a rotina ativa do aluno, ou a mais recente caso a rotina tenha sido encerrada (US-25 C8)
+        // Busca todas as rotinas ativas do aluno, ou a mais recente caso nenhuma esteja ativa
         List<RotinaTreino> todasRotinas = rotinaTreinoRepository.findByPersonalTrainerIdAndAlunosId(personal.getId(), aluno.getId());
-
-        RotinaTreino rotinaAtiva = todasRotinas.stream()
+        List<RotinaTreino> rotinasAtivasList = todasRotinas.stream()
                 .filter(r -> Boolean.TRUE.equals(r.getAtivo()))
-                .findFirst()
-                .orElse(!todasRotinas.isEmpty() ? todasRotinas.get(todasRotinas.size() - 1) : null);
+                .toList();
 
-        List<SessaoTreino> sessoes = rotinaAtiva != null
-                ? sessaoTreinoRepository.findByRotinaTreinoIdOrderBySemanaAscDataPlanejadaAsc(rotinaAtiva.getId())
-                : List.of();
+        RotinaTreino rotinaPrimaria = !rotinasAtivasList.isEmpty()
+                ? rotinasAtivasList.getFirst()
+                : (!todasRotinas.isEmpty() ? todasRotinas.get(todasRotinas.size() - 1) : null);
 
+        List<AcompanhamentoAlunoResponseDTO.RotinaAtivaAcompanhamentoDTO> rotinasAtivasDTO = new ArrayList<>();
+        RotinaTrackingSnapshot snapshotPrimario = new RotinaTrackingSnapshot(List.of(), List.of(), 0, 0);
+        int totalMetricasPendentesNotificacao = 0;
+
+        if (!rotinasAtivasList.isEmpty()) {
+            for (int i = 0; i < rotinasAtivasList.size(); i++) {
+                RotinaTreino rotinaAtivaItem = rotinasAtivasList.get(i);
+                RotinaTrackingSnapshot snapshot = montarSnapshotRotina(rotinaAtivaItem);
+                if (i == 0) {
+                    snapshotPrimario = snapshot;
+                }
+                totalMetricasPendentesNotificacao += snapshot.todasMetricasPendentes().size();
+                rotinasAtivasDTO.add(new AcompanhamentoAlunoResponseDTO.RotinaAtivaAcompanhamentoDTO(
+                        rotinaAtivaItem.getId(),
+                        rotinaAtivaItem.getTitulo(),
+                        rotinaAtivaItem.getModalidade() != null ? rotinaAtivaItem.getModalidade().getId() : null,
+                        rotinaAtivaItem.getModalidade() != null ? rotinaAtivaItem.getModalidade().getNome() : null,
+                        rotinaAtivaItem.getFrequenciaSemanal(),
+                        snapshot.todasMetricasPendentes().size(),
+                        snapshot.totalPlanejadas(),
+                        snapshot.totalConcluidas(),
+                        snapshot.todasMetricasPendentes(),
+                        snapshot.sessoesDTO()
+                ));
+            }
+        } else if (rotinaPrimaria != null) {
+            snapshotPrimario = montarSnapshotRotina(rotinaPrimaria);
+            totalMetricasPendentesNotificacao = snapshotPrimario.todasMetricasPendentes().size();
+        }
+
+        // Sincroniza notificação usando o total consolidado de métricas pendentes das rotinas ativas
+        sincronizarNotificacaoAluno(personal, aluno, totalMetricasPendentesNotificacao);
+
+        String nomeAluno = aluno.getUsuario() != null ? aluno.getUsuario().getNome() : null;
+        String emailAluno = aluno.getUsuario() != null ? aluno.getUsuario().getEmail() : null;
+
+        return new AcompanhamentoAlunoResponseDTO(
+                aluno.getId(),
+                nomeAluno,
+                emailAluno,
+                rotinaPrimaria != null ? rotinaPrimaria.getId() : null,
+                rotinaPrimaria != null ? rotinaPrimaria.getTitulo() : null,
+                rotinaPrimaria != null && rotinaPrimaria.getModalidade() != null ? rotinaPrimaria.getModalidade().getId() : null,
+                rotinaPrimaria != null && rotinaPrimaria.getModalidade() != null ? rotinaPrimaria.getModalidade().getNome() : null,
+                snapshotPrimario.todasMetricasPendentes().size(),
+                snapshotPrimario.totalPlanejadas(),
+                snapshotPrimario.totalConcluidas(),
+                snapshotPrimario.todasMetricasPendentes(),
+                snapshotPrimario.sessoesDTO(),
+                rotinasAtivasDTO
+        );
+    }
+
+    private record RotinaTrackingSnapshot(
+            List<MetricaPendenteDTO> todasMetricasPendentes,
+            List<SessaoAcompanhamentoDTO> sessoesDTO,
+            int totalPlanejadas,
+            int totalConcluidas
+    ) {}
+
+    private RotinaTrackingSnapshot montarSnapshotRotina(RotinaTreino rotina) {
+        List<SessaoTreino> sessoes = sessaoTreinoRepository.findByRotinaTreinoIdOrderBySemanaAscDataPlanejadaAsc(rotina.getId());
         List<MetricaPendenteDTO> todasMetricasPendentes = new ArrayList<>();
         List<SessaoAcompanhamentoDTO> sessoesDTO = new ArrayList<>();
 
@@ -64,7 +124,11 @@ public class AcompanhamentoTreinoService {
 
             DesempenhoResponseDTO desempenhoDTO = toDesempenhoResponseDTO(sessao.getDesempenho());
 
-            // US-24 C10: Sessão concluída com pendências do personal continua "concluída" e indica pendências separadamente
+            List<RotinaTreinoResponseDTO.MetricaResumoDTO> metricasSessaoDTO = extrairMetricasSessaoDTO(sessao);
+            List<UUID> metricasIds = metricasSessaoDTO.stream()
+                    .map(RotinaTreinoResponseDTO.MetricaResumoDTO::id)
+                    .toList();
+
             sessoesDTO.add(new SessaoAcompanhamentoDTO(
                     sessao.getId(),
                     sessao.getSemana(),
@@ -78,30 +142,13 @@ public class AcompanhamentoTreinoService {
                     !pendenciasSessao.isEmpty(),
                     pendenciasSessao.size(),
                     pendenciasSessao,
-                    desempenhoDTO
+                    desempenhoDTO,
+                    metricasIds,
+                    metricasSessaoDTO
             ));
         }
 
-        // US-24 C4/C5/C6: Sincroniza notificação usando a mesma fonte de dados do indicador
-        sincronizarNotificacaoAluno(personal, aluno, todasMetricasPendentes.size());
-
-        String nomeAluno = aluno.getUsuario() != null ? aluno.getUsuario().getNome() : null;
-        String emailAluno = aluno.getUsuario() != null ? aluno.getUsuario().getEmail() : null;
-
-        return new AcompanhamentoAlunoResponseDTO(
-                aluno.getId(),
-                nomeAluno,
-                emailAluno,
-                rotinaAtiva != null ? rotinaAtiva.getId() : null,
-                rotinaAtiva != null ? rotinaAtiva.getTitulo() : null,
-                rotinaAtiva != null ? rotinaAtiva.getModalidade().getId() : null,
-                rotinaAtiva != null ? rotinaAtiva.getModalidade().getNome() : null,
-                todasMetricasPendentes.size(),
-                totalPlanejadas,
-                totalConcluidas,
-                todasMetricasPendentes,
-                sessoesDTO
-        );
+        return new RotinaTrackingSnapshot(todasMetricasPendentes, sessoesDTO, totalPlanejadas, totalConcluidas);
     }
 
     @Transactional
@@ -270,16 +317,35 @@ public class AcompanhamentoTreinoService {
         }
     }
 
+    private List<RotinaTreinoResponseDTO.MetricaResumoDTO> extrairMetricasSessaoDTO(SessaoTreino sessao) {
+        if (sessao == null || sessao.getMetricas() == null || sessao.getMetricas().isEmpty()) {
+            return List.of();
+        }
+        boolean preservarDescontinuadas = sessao.getStatus() == StatusSessaoTreino.CONCLUIDA;
+        return sessao.getMetricas().stream()
+                .filter(m -> preservarDescontinuadas || Boolean.TRUE.equals(m.getAtivo()))
+                .sorted(Comparator.comparing(Metrica::getTitulo, String.CASE_INSENSITIVE_ORDER))
+                .map(m -> new RotinaTreinoResponseDTO.MetricaResumoDTO(
+                        m.getId(),
+                        m.getTitulo(),
+                        m.getTipo(),
+                        m.getObrigatoria(),
+                        m.getQuemPreenche(),
+                        m.getCampoStrava()
+                ))
+                .toList();
+    }
+
     /**
      * Extrai as métricas pendentes do personal em uma sessão específica.
      * Métricas exclusivas do personal (PERSONAL) ou de ambos (AMBOS) que ainda não foram preenchidas no desempenho.
      */
     private List<MetricaPendenteDTO> extrairPendenciasSessao(SessaoTreino sessao) {
-        if (sessao.getRotinaTreino() == null || sessao.getRotinaTreino().getMetricas() == null) {
+        if (sessao == null || sessao.getMetricas() == null || sessao.getMetricas().isEmpty()) {
             return List.of();
         }
 
-        Set<Metrica> metricasRotina = sessao.getRotinaTreino().getMetricas();
+        Set<Metrica> metricasSessao = sessao.getMetricas();
         Desempenho desempenho = sessao.getDesempenho();
 
         Set<UUID> metricasPreenchidas = new HashSet<>();
@@ -292,7 +358,7 @@ public class AcompanhamentoTreinoService {
         }
 
         List<MetricaPendenteDTO> pendentes = new ArrayList<>();
-        for (Metrica m : metricasRotina) {
+        for (Metrica m : metricasSessao) {
             if (Boolean.FALSE.equals(m.getAtivo())) {
                 continue;
             }

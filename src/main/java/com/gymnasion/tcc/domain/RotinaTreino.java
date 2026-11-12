@@ -3,7 +3,10 @@ package com.gymnasion.tcc.domain;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -50,16 +53,25 @@ public class RotinaTreino {
     @Builder.Default
     private Set<Aluno> alunos = new HashSet<>();
 
-    @ManyToMany
-    @JoinTable(
-            name = "rotina_treino_metrica",
-            joinColumns = @JoinColumn(name = "rotina_treino_id"),
-            inverseJoinColumns = @JoinColumn(name = "metrica_id")
-    )
-    @Builder.Default
-    private Set<Metrica> metricas = new HashSet<>();
-
     @OneToMany(mappedBy = "rotinaTreino", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
     private java.util.List<SessaoTreino> sessoes = new java.util.ArrayList<>();
+
+    /**
+     * Auxiliar em memória para derivar as métricas ativas distintas vinculadas às sessões
+     * quando a coleção de sessões já estiver inicializada no contexto de persistência.
+     */
+    public List<Metrica> getMetricasUtilizadasNasSessoes() {
+        if (this.sessoes == null || this.sessoes.isEmpty()) {
+            return List.of();
+        }
+        return this.sessoes.stream()
+                .map(SessaoTreino::getMetricas)
+                .filter(Objects::nonNull)
+                .flatMap(Set::stream)
+                .filter(m -> Boolean.TRUE.equals(m.getAtivo()))
+                .distinct()
+                .sorted(Comparator.comparing(Metrica::getTitulo, String.CASE_INSENSITIVE_ORDER))
+                .toList();
+    }
 }

@@ -1,18 +1,23 @@
 package com.gymnasion.tcc.service;
 
 import com.gymnasion.tcc.domain.Aluno;
+import com.gymnasion.tcc.domain.Modalidade;
 import com.gymnasion.tcc.domain.PersonalTrainer;
 import com.gymnasion.tcc.domain.Usuario;
 import com.gymnasion.tcc.domain.enums.StatusConvite;
 import com.gymnasion.tcc.dto.AlunoResponseDTO;
+import com.gymnasion.tcc.dto.AtualizarModalidadesAlunoRequestDTO;
 import com.gymnasion.tcc.dto.MensagemResponseDTO;
 import com.gymnasion.tcc.dto.ModalidadeResponseDTO;
 import com.gymnasion.tcc.dto.UsuarioResponseDTO;
 import com.gymnasion.tcc.exceptions.BusinessException;
 import com.gymnasion.tcc.exceptions.NotFoundException;
 import com.gymnasion.tcc.repository.AlunoRepository;
+import com.gymnasion.tcc.repository.ModalidadeRepository;
 import com.gymnasion.tcc.repository.PersonalTrainerRepository;
+import com.gymnasion.tcc.repository.RotinaTreinoRepository;
 import com.gymnasion.tcc.repository.TermoAceiteRepository;
+import com.gymnasion.tcc.repository.TurmaRepository;
 import com.gymnasion.tcc.repository.UsuarioRepository;
 import com.gymnasion.tcc.event.SolicitacaoAlunoAvaliadaEvent;
 import lombok.AllArgsConstructor;
@@ -23,7 +28,10 @@ import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -36,6 +44,9 @@ public class AlunoService {
     private final PersonalTrainerRepository personalTrainerRepository;
     private final UsuarioRepository usuarioRepository;
     private final TermoAceiteRepository termoAceiteRepository;
+    private final ModalidadeRepository modalidadeRepository;
+    private final RotinaTreinoRepository rotinaTreinoRepository;
+    private final TurmaRepository turmaRepository;
     private final NotificacaoService notificacaoService;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -104,6 +115,53 @@ public class AlunoService {
                 .stream()
                 .map(this::toAlunoResponseDTO)
                 .toList();
+    }
+
+    @Transactional
+    public AlunoResponseDTO atualizarModalidades(UUID alunoId, AtualizarModalidadesAlunoRequestDTO dto, Usuario usuarioLogado) {
+        Aluno aluno = validarEPegarAlunoDoPersonal(alunoId, usuarioLogado);
+
+        List<Long> idsDeduplicados = dto != null && dto.modalidadesIds() != null
+                ? dto.modalidadesIds().stream().filter(Objects::nonNull).distinct().toList()
+                : List.of();
+
+        if (idsDeduplicados.isEmpty()) {
+            throw new BusinessException("Selecione pelo menos uma modalidade esportiva.");
+        }
+        if (idsDeduplicados.size() > 3) {
+            throw new BusinessException("O aluno pode ter no máximo 3 modalidades vinculadas.");
+        }
+
+        Set<Modalidade> modalidadesAtuais = aluno.getModalidades() != null ? aluno.getModalidades() : Set.of();
+        Set<Long> atuaisIds = modalidadesAtuais.stream()
+                .map(Modalidade::getId)
+                .collect(Collectors.toSet());
+
+        List<Modalidade> novasModalidades = new ArrayList<>();
+        for (Long modId : idsDeduplicados) {
+            Modalidade modalidade = modalidadeRepository.findById(modId)
+                    .orElseThrow(() -> new NotFoundException("Modalidade não encontrada."));
+            if (!atuaisIds.contains(modId) && Boolean.FALSE.equals(modalidade.getAtivo())) {
+                throw new BusinessException("A modalidade '" + modalidade.getNome() + "' está desativada e não pode ser vinculada ao aluno.");
+            }
+            novasModalidades.add(modalidade);
+        }
+
+        Set<Long> novasIds = idsDeduplicados.stream().collect(Collectors.toSet());
+        for (Modalidade modRemovida : modalidadesAtuais) {
+            if (!novasIds.contains(modRemovida.getId())) {
+                if (rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(alunoId, modRemovida.getId())) {
+                    throw new BusinessException("Não é possível remover a modalidade '" + modRemovida.getNome() + "' pois o aluno possui uma rotina ativa vinculada a ela.");
+                }
+                if (turmaRepository.existsByPersonalIdAndModalidadeIdAndAlunosId(aluno.getPersonal().getId(), modRemovida.getId(), alunoId)) {
+                    throw new BusinessException("Não é possível remover a modalidade '" + modRemovida.getNome() + "' pois o aluno está vinculado a uma turma desta modalidade.");
+                }
+            }
+        }
+
+        aluno.setModalidades(new HashSet<>(novasModalidades));
+        aluno = alunoRepository.save(aluno);
+        return toAlunoResponseDTO(aluno);
     }
 
     @Transactional

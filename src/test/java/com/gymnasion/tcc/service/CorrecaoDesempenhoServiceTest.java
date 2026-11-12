@@ -97,7 +97,6 @@ class CorrecaoDesempenhoServiceTest {
                 .personalTrainer(personalTrainer)
                 .frequenciaSemanal(3)
                 .alunos(new HashSet<>(Set.of(aluno)))
-                .metricas(new HashSet<>(Set.of(tempo, bracadas, analiseTecnica, percepcaoAluno, descontinuada)))
                 .build();
 
         sessaoId = UUID.randomUUID();
@@ -109,6 +108,7 @@ class CorrecaoDesempenhoServiceTest {
                 .dataReal(LocalDate.of(2026, 10, 22))
                 .status(StatusSessaoTreino.CONCLUIDA)
                 .concluidaAluno(true)
+                .metricas(new HashSet<>(Set.of(tempo, bracadas, analiseTecnica, percepcaoAluno, descontinuada)))
                 .build();
 
         desempenho = Desempenho.builder()
@@ -457,5 +457,30 @@ class CorrecaoDesempenhoServiceTest {
             assertThat(item.responsavelNome()).isEqualTo("Treinador Carlos");
             assertThat(item.dataHoraAlteracao()).isEqualTo(quando);
         });
+    }
+
+    @Test
+    @DisplayName("US23: Sessão concluída com 0 métricas permite corrigir dataReal e observações")
+    void US23_sessaoSemMetricasPermiteCorrigirDataRealEObservacoes() {
+        sessao.setMetricas(new HashSet<>());
+        desempenho.getRegistrosMetricas().clear();
+        personalResponsavelAcessaSessao();
+        salvamentoRetornaSessao();
+
+        LocalDate novaData = LocalDate.of(2026, 10, 23);
+        CorrigirDesempenhoRequestDTO dto = new CorrigirDesempenhoRequestDTO(
+                novaData, "Bom ritmo de prova", List.of()
+        );
+
+        DesempenhoDetalheResponseDTO detalhe = correcaoDesempenhoService.corrigirRegistro(usuarioPersonal, sessaoId, dto);
+
+        assertThat(detalhe.dataReal()).isEqualTo(novaData);
+        assertThat(detalhe.observacoes()).isEqualTo("Bom ritmo de prova");
+        assertThat(detalhe.metricas()).isEmpty();
+
+        verify(auditoriaDesempenhoRepository).saveAll(auditoriasCaptor.capture());
+        assertThat(auditoriasCaptor.getValue())
+                .extracting(AuditoriaDesempenho::getCampo)
+                .containsExactlyInAnyOrder(CampoAuditado.DATA_REAL, CampoAuditado.OBSERVACOES);
     }
 }

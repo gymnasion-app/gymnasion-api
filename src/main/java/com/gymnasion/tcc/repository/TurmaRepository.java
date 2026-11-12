@@ -37,4 +37,6 @@ public interface TurmaRepository extends JpaRepository<Turma, UUID> {
             "LEFT JOIN FETCH a.usuario " +
             "WHERE t.id = :id AND p.id = :personalId")
     Optional<Turma> findByIdAndPersonalId(@Param("id") UUID id, @Param("personalId") UUID personalId);
+
+    boolean existsByPersonalIdAndModalidadeIdAndAlunosId(UUID personalId, Long modalidadeId, UUID alunoId);
 }

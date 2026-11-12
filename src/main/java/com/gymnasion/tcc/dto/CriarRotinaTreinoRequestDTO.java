@@ -27,9 +27,5 @@ public record CriarRotinaTreinoRequestDTO(
 
         @NotEmpty(message = "É necessário selecionar pelo menos 1 (um) aluno.")
         @Schema(description = "Lista de IDs dos alunos vinculados à rotina")
-        Set<UUID> alunosIds,
-
-        @NotEmpty(message = "É necessário selecionar pelo menos 1 (uma) métrica personalizada.")
-        @Schema(description = "Lista de IDs das métricas personalizadas da modalidade vinculadas a esta rotina")
-        Set<UUID> metricasIds
+        Set<UUID> alunosIds
 ) {}

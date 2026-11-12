@@ -2,6 +2,7 @@ package com.gymnasion.tcc.dto;
 
 import com.gymnasion.tcc.domain.enums.StatusSessaoTreino;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 public record SessaoTreinoResponseDTO(
@@ -15,5 +16,7 @@ public record SessaoTreinoResponseDTO(
         StatusSessaoTreino status,
         Boolean concluidaAluno,
         Boolean validadaPersonal,
-        DesempenhoResponseDTO desempenho
+        DesempenhoResponseDTO desempenho,
+        List<UUID> metricasIds,
+        List<RotinaTreinoResponseDTO.MetricaResumoDTO> metricas
 ) {}

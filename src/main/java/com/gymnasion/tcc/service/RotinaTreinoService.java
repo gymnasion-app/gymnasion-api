@@ -14,6 +14,7 @@ import com.gymnasion.tcc.exceptions.MetricasInvalidasException;
 import com.gymnasion.tcc.exceptions.NotFoundException;
 import com.gymnasion.tcc.repository.*;
 import lombok.AllArgsConstructor;
+import org.hibernate.Hibernate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -41,6 +42,16 @@ public class RotinaTreinoService {
 
     private static final java.time.ZoneId ZONE_BRASIL = java.time.ZoneId.of("America/Sao_Paulo");
 
+    private void validarModalidadeVinculadaAoAluno(Aluno aluno, Modalidade modalidade) {
+        if (modalidade == null) {
+            return;
+        }
+        if (aluno.getModalidades() == null || aluno.getModalidades().stream().noneMatch(m -> m.getId().equals(modalidade.getId()))) {
+            String nome = aluno.getUsuario() != null ? aluno.getUsuario().getNome() : "selecionado";
+            throw new BusinessException("O aluno " + nome + " não possui a modalidade '" + modalidade.getNome() + "' vinculada ao seu perfil.");
+        }
+    }
+
     /**
      * US-21 C2: Impede que alunos acessem o formulário ou registrem sessões pertencentes a semanas futuras.
      */
@@ -67,29 +78,6 @@ public class RotinaTreinoService {
             throw new BusinessException("Esta modalidade está desativada e não pode receber novas rotinas de treino.");
         }
 
-        // US-10 Cenário 2: Verifica se existem métricas cadastradas para a modalidade antes de continuar
-        List<Metrica> metricasDaModalidade = metricaRepository.findByPersonalTrainerIdAndModalidadeId(
-                personal.getId(), dto.modalidadeId()
-        );
-        if (metricasDaModalidade.isEmpty()) {
-            throw new BusinessException("Nenhuma métrica cadastrada para essa modalidade. Cadastre ao menos uma métrica antes de continuar.");
-        }
-
-        // Validação e associação das métricas selecionadas
-        Set<Metrica> metricasValidadas = new HashSet<>();
-        for (UUID metricaId : dto.metricasIds()) {
-            Metrica metrica = metricaRepository.findByIdAndPersonalTrainerId(metricaId, personal.getId())
-                    .orElseThrow(() -> new NotFoundException("Métrica com ID " + metricaId + " não foi encontrada para este Personal Trainer."));
-
-            if (!metrica.getModalidade().getId().equals(modalidade.getId())) {
-                throw new BusinessException("A métrica '" + metrica.getTitulo() + "' não pertence à modalidade selecionada.");
-            }
-            if (Boolean.FALSE.equals(metrica.getAtivo())) {
-                throw new BusinessException("A métrica '" + metrica.getTitulo() + "' está descontinuada e não pode ser vinculada a uma nova rotina.");
-            }
-            metricasValidadas.add(metrica);
-        }
-
         Set<Aluno> alunosValidados = new HashSet<>();
         for (UUID alunoId : dto.alunosIds()) {
             Aluno aluno = alunoRepository.findByIdAndPersonalId(alunoId, personal.getId())
@@ -98,6 +86,8 @@ public class RotinaTreinoService {
             if (aluno.getStatus() == StatusConvite.INATIVO) {
                 throw new BusinessException("Erro. Este aluno está inativo.");
             }
+
+            validarModalidadeVinculadaAoAluno(aluno, modalidade);
 
             // Trava de 1 rotina ativa (US-11 / US-25 C6) - por modalidade
             if (rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(aluno.getId(), modalidade.getId())) {
@@ -108,7 +98,6 @@ public class RotinaTreinoService {
             alunosValidados.add(aluno);
         }
 
-
         RotinaTreino rotina = RotinaTreino.builder()
                 .titulo(dto.titulo().trim())
                 .modalidade(modalidade)
@@ -116,42 +105,45 @@ public class RotinaTreinoService {
                 .objetivos(dto.objetivos())
                 .personalTrainer(personal)
                 .alunos(alunosValidados)
-                .metricas(metricasValidadas)
                 .build();
 
         rotina = rotinaTreinoRepository.save(rotina);
-        return toResponseDTO(rotina);
+        return toResponseDTO(rotina, List.of());
     }
 
     @Transactional(readOnly = true)
     public Page<RotinaTreinoResponseDTO> listarPorPersonal(Usuario usuario, Pageable pageable) {
         PersonalTrainer personal = obterPersonalLogado(usuario);
-        return rotinaTreinoRepository.findByPersonalTrainerId(personal.getId(), pageable)
-                .map(this::toResponseDTO);
+        Page<RotinaTreino> page = rotinaTreinoRepository.findByPersonalTrainerId(personal.getId(), pageable);
+        Map<UUID, List<Metrica>> metricasPorRotina = carregarMetricasAtivasPorRotinaIds(page.getContent());
+        return page.map(r -> toResponseDTO(r, metricasPorRotina.getOrDefault(r.getId(), List.of())));
     }
 
     @Transactional(readOnly = true)
     public List<RotinaTreinoResponseDTO> listarPorPersonal(Usuario usuario) {
         PersonalTrainer personal = obterPersonalLogado(usuario);
-        return rotinaTreinoRepository.findByPersonalTrainerId(personal.getId())
-                .stream()
-                .map(this::toResponseDTO)
+        List<RotinaTreino> rotinas = rotinaTreinoRepository.findByPersonalTrainerId(personal.getId());
+        Map<UUID, List<Metrica>> metricasPorRotina = carregarMetricasAtivasPorRotinaIds(rotinas);
+        return rotinas.stream()
+                .map(r -> toResponseDTO(r, metricasPorRotina.getOrDefault(r.getId(), List.of())))
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public Page<RotinaTreinoResponseDTO> listarPorAluno(Usuario usuario, UUID alunoId, Pageable pageable) {
         PersonalTrainer personal = obterPersonalLogado(usuario);
-        return rotinaTreinoRepository.findByPersonalTrainerIdAndAlunosId(personal.getId(), alunoId, pageable)
-                .map(this::toResponseDTO);
+        Page<RotinaTreino> page = rotinaTreinoRepository.findByPersonalTrainerIdAndAlunosId(personal.getId(), alunoId, pageable);
+        Map<UUID, List<Metrica>> metricasPorRotina = carregarMetricasAtivasPorRotinaIds(page.getContent());
+        return page.map(r -> toResponseDTO(r, metricasPorRotina.getOrDefault(r.getId(), List.of())));
     }
 
     @Transactional(readOnly = true)
     public List<RotinaTreinoResponseDTO> listarPorAluno(Usuario usuario, UUID alunoId) {
         PersonalTrainer personal = obterPersonalLogado(usuario);
-        return rotinaTreinoRepository.findByPersonalTrainerIdAndAlunosId(personal.getId(), alunoId)
-                .stream()
-                .map(this::toResponseDTO)
+        List<RotinaTreino> rotinas = rotinaTreinoRepository.findByPersonalTrainerIdAndAlunosId(personal.getId(), alunoId);
+        Map<UUID, List<Metrica>> metricasPorRotina = carregarMetricasAtivasPorRotinaIds(rotinas);
+        return rotinas.stream()
+                .map(r -> toResponseDTO(r, metricasPorRotina.getOrDefault(r.getId(), List.of())))
                 .toList();
     }
 
@@ -159,8 +151,9 @@ public class RotinaTreinoService {
     public Page<RotinaTreinoResponseDTO> listarMinhasRotinas(Usuario usuario, Pageable pageable) {
         Aluno aluno = alunoRepository.findByUsuario(usuario)
                 .orElseThrow(() -> new NotFoundException("Aluno não encontrado."));
-        return rotinaTreinoRepository.findByAlunosId(aluno.getId(), pageable)
-                .map(this::toResponseDTO);
+        Page<RotinaTreino> page = rotinaTreinoRepository.findByAlunosId(aluno.getId(), pageable);
+        Map<UUID, List<Metrica>> metricasPorRotina = carregarMetricasAtivasPorRotinaIds(page.getContent());
+        return page.map(r -> toResponseDTO(r, metricasPorRotina.getOrDefault(r.getId(), List.of())));
     }
 
 
@@ -186,25 +179,6 @@ public class RotinaTreinoService {
             throw new BusinessException("É necessário selecionar pelo menos 1 (um) aluno.");
         }
 
-        if (dto.metricasIds() == null || dto.metricasIds().isEmpty()) {
-            throw new BusinessException("É necessário selecionar pelo menos 1 (uma) métrica personalizada.");
-        }
-
-        // Validação e associação das métricas selecionadas
-        Set<Metrica> metricasValidadas = new HashSet<>();
-        for (UUID metricaId : dto.metricasIds()) {
-            Metrica metrica = metricaRepository.findByIdAndPersonalTrainerId(metricaId, personal.getId())
-                    .orElseThrow(() -> new NotFoundException("Métrica com ID " + metricaId + " não foi encontrada para este Personal Trainer."));
-
-            if (!metrica.getModalidade().getId().equals(rotina.getModalidade().getId())) {
-                throw new BusinessException("A métrica '" + metrica.getTitulo() + "' não pertence à modalidade selecionada.");
-            }
-            if (Boolean.FALSE.equals(metrica.getAtivo())) {
-                throw new BusinessException("A métrica '" + metrica.getTitulo() + "' está descontinuada e não pode ser vinculada a uma nova rotina.");
-            }
-            metricasValidadas.add(metrica);
-        }
-
         // Validação e associação dos alunos
         Set<Aluno> alunosValidados = new HashSet<>();
         for (UUID alunoId : dto.alunosIds()) {
@@ -214,6 +188,8 @@ public class RotinaTreinoService {
             if (aluno.getStatus() == StatusConvite.INATIVO) {
                 throw new BusinessException("Erro. Este aluno está inativo.");
             }
+
+            validarModalidadeVinculadaAoAluno(aluno, rotina.getModalidade());
 
             // Trava de 1 rotina ativa na mesma modalidade, ignorando a própria rotina sendo atualizada
             if (rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrueAndIdNot(aluno.getId(), rotina.getModalidade().getId(), rotina.getId())) {
@@ -229,7 +205,6 @@ public class RotinaTreinoService {
         rotina.setTitulo(dto.titulo().trim());
         rotina.setFrequenciaSemanal(dto.frequenciaSemanal());
         rotina.setObjetivos(dto.objetivos());
-        rotina.setMetricas(metricasValidadas);
         rotina.setAlunos(alunosValidados);
 
         rotina = rotinaTreinoRepository.save(rotina);
@@ -324,6 +299,8 @@ public class RotinaTreinoService {
                 throw new BusinessException("Esse aluno já possui o treino vinculado.");
             }
 
+            validarModalidadeVinculadaAoAluno(aluno, rotina.getModalidade());
+
             // Trava de 1 rotina ativa (US-11 / US-25 C6) - por modalidade
             if (rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrueAndIdNot(aluno.getId(), rotina.getModalidade().getId(), rotina.getId())) {
                 String nome = aluno.getUsuario() != null ? aluno.getUsuario().getNome() : "selecionado";
@@ -391,6 +368,8 @@ public class RotinaTreinoService {
             if (jaVinculado) {
                 continue;
             }
+
+            validarModalidadeVinculadaAoAluno(aluno, rotina.getModalidade());
 
             // Trava de 1 rotina ativa na mesma modalidade (US-11 / US-25 C6)
             boolean possuiConflito = rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrueAndIdNot(
@@ -546,6 +525,8 @@ public class RotinaTreinoService {
             throw new BusinessException("Erro. Este aluno está inativo.");
         }
 
+        validarModalidadeVinculadaAoAluno(aluno, rotinaOrigem.getModalidade());
+
         // US-25 C6: Máximo de 1 rotina ativa por aluno na modalidade
         if (rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(aluno.getId(), rotinaOrigem.getModalidade().getId())) {
             String nome = aluno.getUsuario() != null ? aluno.getUsuario().getNome() : "selecionado";
@@ -559,13 +540,6 @@ public class RotinaTreinoService {
         String objetivos = objetivosPersonalizados != null ? objetivosPersonalizados : rotinaOrigem.getObjetivos();
 
         // US-25 C3 / C5 / C9: Nova rotina como cópia independente, vinculada ao aluno, ativa
-        // RN-017 / US-19 C3: Copia apenas métricas ativas da rotina de origem
-        Set<Metrica> metricasAtivas = (rotinaOrigem.getMetricas() != null)
-                ? rotinaOrigem.getMetricas().stream()
-                        .filter(m -> Boolean.TRUE.equals(m.getAtivo()))
-                        .collect(Collectors.toSet())
-                : new HashSet<>();
-
         RotinaTreino novaRotina = RotinaTreino.builder()
                 .titulo(titulo)
                 .modalidade(rotinaOrigem.getModalidade())
@@ -574,14 +548,17 @@ public class RotinaTreinoService {
                 .personalTrainer(personal)
                 .ativo(true)
                 .alunos(new HashSet<>(Set.of(aluno)))
-                .metricas(metricasAtivas)
                 .sessoes(new ArrayList<>())
                 .build();
 
         // US-25 C3 e C4: Copia estrutura das sessões e recalcula datas planejadas conforme nova data de início
-        List<SessaoTreino> sessoesOrigem = (rotinaOrigem.getSessoes() != null && !rotinaOrigem.getSessoes().isEmpty())
-                ? rotinaOrigem.getSessoes()
-                : sessaoTreinoRepository.findByRotinaTreinoIdOrderBySemanaAscDataPlanejadaAsc(rotinaOrigem.getId());
+        List<SessaoTreino> sessoesOrigem = sessaoTreinoRepository.findByRotinaTreinoIdOrderBySemanaAscDataPlanejadaAsc(rotinaOrigem.getId());
+        if ((sessoesOrigem == null || sessoesOrigem.isEmpty())
+                && Hibernate.isInitialized(rotinaOrigem.getSessoes())
+                && rotinaOrigem.getSessoes() != null
+                && !rotinaOrigem.getSessoes().isEmpty()) {
+            sessoesOrigem = rotinaOrigem.getSessoes();
+        }
 
         if (sessoesOrigem != null && !sessoesOrigem.isEmpty()) {
             List<SessaoTreino> sessoesOrdenadas = sessoesOrigem.stream()
@@ -605,6 +582,7 @@ public class RotinaTreinoService {
                 }
 
                 LocalDate novaDataPlanejada = dataInicio.plusDays(offsetDias);
+                Set<Metrica> metricasSessaoAtivas = extrairMetricasAtivasCopia(so);
 
                 // C3 e C9: Status PLANEJADA, sem resultados, datas reais ou desempenho da origem
                 SessaoTreino novaSessao = SessaoTreino.builder()
@@ -618,6 +596,7 @@ public class RotinaTreinoService {
                         .validadaPersonal(false)
                         .dataReal(null)
                         .desempenho(null)
+                        .metricas(metricasSessaoAtivas)
                         .build();
 
                 novaRotina.getSessoes().add(novaSessao);
@@ -644,6 +623,12 @@ public class RotinaTreinoService {
             throw new BusinessException("Não é possível adicionar sessões a uma rotina de treino já encerrada.");
         }
 
+        Set<Metrica> metricasSessao = validarMetricasDaModalidade(
+                personal,
+                rotina.getModalidade().getId(),
+                dto.metricasIds()
+        );
+
         SessaoTreino sessao = SessaoTreino.builder()
                 .rotinaTreino(rotina)
                 .semana(dto.semana())
@@ -653,16 +638,13 @@ public class RotinaTreinoService {
                 .status(StatusSessaoTreino.PLANEJADA)
                 .concluidaAluno(false)
                 .validadaPersonal(false)
+                .metricas(metricasSessao)
                 .build();
 
         sessao = sessaoTreinoRepository.save(sessao);
 
         // US-24 C4: Notificação criada/atualizada assim que houver pendência do personal
-        if (acompanhamentoTreinoService != null && rotina.getAlunos() != null) {
-            for (Aluno a : rotina.getAlunos()) {
-                acompanhamentoTreinoService.sincronizarNotificacaoParaAluno(a);
-            }
-        }
+        sincronizarNotificacoesDaRotina(rotina);
 
         return toSessaoResponseDTO(sessao);
     }
@@ -775,7 +757,12 @@ public class RotinaTreinoService {
         SessaoTreino sessao = sessaoTreinoRepository.findByIdAndPersonalTrainerId(sessaoId, personal.getId())
                 .orElseThrow(() -> new NotFoundException("Sessão de treino não encontrada para este Personal Trainer."));
 
-        // US-10 Cenário 2: Editar sessões futuras - só sessões não executadas; preserva dados/resultados das executadas
+        RotinaTreino rotina = sessao.getRotinaTreino();
+        if (rotina != null && Boolean.FALSE.equals(rotina.getAtivo())) {
+            throw new BusinessException("Não é possível editar sessões de uma rotina de treino já encerrada.");
+        }
+
+        // US-10 Cenário 2: Editar sessões planejadas - só sessões não executadas; preserva dados/resultados das executadas
         if (sessao.getStatus() == StatusSessaoTreino.CONCLUIDA) {
             throw new BusinessException("Não é possível editar uma sessão de treino já executada. Os dados históricos devem ser preservados.");
         }
@@ -785,8 +772,97 @@ public class RotinaTreinoService {
         sessao.setDuracao(dto.duracao());
         sessao.setAtividades(dto.atividades());
 
+        boolean alterouMetricas = dto.metricasIds() != null;
+        if (alterouMetricas && rotina != null) {
+            Set<Metrica> metricasSessao = validarMetricasDaModalidade(
+                    personal,
+                    rotina.getModalidade().getId(),
+                    dto.metricasIds()
+            );
+            sessao.setMetricas(metricasSessao);
+        }
+
         sessao = sessaoTreinoRepository.save(sessao);
+        if (alterouMetricas) {
+            sincronizarNotificacoesDaRotina(rotina);
+        }
         return toSessaoResponseDTO(sessao);
+    }
+
+    @Transactional
+    public SessaoTreinoResponseDTO duplicarSessao(Usuario usuario, UUID sessaoId, DuplicarSessaoTreinoRequestDTO dto) {
+        PersonalTrainer personal = obterPersonalLogado(usuario);
+        SessaoTreino sessaoOrigem = sessaoTreinoRepository.findByIdAndPersonalTrainerId(sessaoId, personal.getId())
+                .orElseThrow(() -> new NotFoundException("Sessão de treino não encontrada para este Personal Trainer."));
+
+        RotinaTreino rotina = sessaoOrigem.getRotinaTreino();
+        if (rotina != null && Boolean.FALSE.equals(rotina.getAtivo())) {
+            throw new BusinessException("Não é possível duplicar sessões de uma rotina de treino já encerrada.");
+        }
+
+        SessaoTreino novaSessao = SessaoTreino.builder()
+                .rotinaTreino(rotina)
+                .semana(dto.semana())
+                .dataPlanejada(dto.dataPlanejada())
+                .duracao(sessaoOrigem.getDuracao())
+                .atividades(sessaoOrigem.getAtividades())
+                .status(StatusSessaoTreino.PLANEJADA)
+                .concluidaAluno(false)
+                .validadaPersonal(false)
+                .dataReal(null)
+                .desempenho(null)
+                .metricas(extrairMetricasAtivasCopia(sessaoOrigem))
+                .build();
+
+        novaSessao = sessaoTreinoRepository.save(novaSessao);
+        sincronizarNotificacoesDaRotina(rotina);
+        return toSessaoResponseDTO(novaSessao);
+    }
+
+    @Transactional
+    public PlanejamentoRotinaResponseDTO duplicarSemana(Usuario usuario, UUID rotinaId, Integer semanaOrigem) {
+        if (semanaOrigem == null || semanaOrigem < 1 || semanaOrigem > 103) {
+            throw new BusinessException("A semana de origem deve estar entre 1 e 103.");
+        }
+
+        PersonalTrainer personal = obterPersonalLogado(usuario);
+        RotinaTreino rotina = rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaId, personal.getId())
+                .orElseThrow(() -> new NotFoundException("Rotina de treino não encontrada."));
+
+        if (Boolean.FALSE.equals(rotina.getAtivo())) {
+            throw new BusinessException("Não é possível duplicar semanas de uma rotina de treino já encerrada.");
+        }
+
+        List<SessaoTreino> sessoesOrigem = sessaoTreinoRepository
+                .findByRotinaTreinoIdAndSemanaOrderByDataPlanejadaAsc(rotinaId, semanaOrigem);
+
+        if (sessoesOrigem == null || sessoesOrigem.isEmpty()) {
+            throw new BusinessException("A semana selecionada não possui sessões para duplicar.");
+        }
+
+        int semanaDestino = semanaOrigem + 1;
+        List<SessaoTreino> novasSessoes = new ArrayList<>();
+        for (SessaoTreino so : sessoesOrigem) {
+            LocalDate novaData = so.getDataPlanejada() != null ? so.getDataPlanejada().plusDays(7) : null;
+            SessaoTreino clonada = SessaoTreino.builder()
+                    .rotinaTreino(rotina)
+                    .semana(semanaDestino)
+                    .dataPlanejada(novaData)
+                    .duracao(so.getDuracao())
+                    .atividades(so.getAtividades())
+                    .status(StatusSessaoTreino.PLANEJADA)
+                    .concluidaAluno(false)
+                    .validadaPersonal(false)
+                    .dataReal(null)
+                    .desempenho(null)
+                    .metricas(extrairMetricasAtivasCopia(so))
+                    .build();
+            novasSessoes.add(clonada);
+        }
+
+        sessaoTreinoRepository.saveAll(novasSessoes);
+        sincronizarNotificacoesDaRotina(rotina);
+        return consultarPlanejamento(usuario, rotinaId);
     }
 
     @Transactional(readOnly = true)
@@ -799,18 +875,11 @@ public class RotinaTreinoService {
         // US-21 C2: Aluno não acessa formulário de sessão de semanas futuras
         validarSessaoNaoPertenceASemanaFutura(sessao);
 
-        // US-22 Cenário 1: Disponibiliza as métricas configuradas pelo personal (descontinuadas não aparecem - US-19 C3)
-        List<RotinaTreinoResponseDTO.MetricaResumoDTO> metricasDTO = sessao.getRotinaTreino().getMetricas().stream()
+        // US-22 Cenário 1: Disponibiliza apenas métricas ativas vinculadas à sessão (US-19 C3)
+        List<RotinaTreinoResponseDTO.MetricaResumoDTO> metricasDTO = (sessao.getMetricas() != null ? sessao.getMetricas() : Set.<Metrica>of()).stream()
                 .filter(metrica -> Boolean.TRUE.equals(metrica.getAtivo()))
-                .sorted(Comparator.comparing(Metrica::getTitulo))
-                .map(metrica -> new RotinaTreinoResponseDTO.MetricaResumoDTO(
-                        metrica.getId(),
-                        metrica.getTitulo(),
-                        metrica.getTipo(),
-                        metrica.getObrigatoria(),
-                        metrica.getQuemPreenche(),
-                        metrica.getCampoStrava()
-                ))
+                .sorted(Comparator.comparing(Metrica::getTitulo, String.CASE_INSENSITIVE_ORDER))
+                .map(this::toMetricaResumoDTO)
                 .toList();
 
         // US-22 Cenário 8: Sessão já confirmada é exibida apenas para consulta
@@ -857,10 +926,6 @@ public class RotinaTreinoService {
                 }
             }
 
-            // US-10: O registro feito pelo personal exige ao menos um resultado de métrica
-            if (resultados.isEmpty()) {
-                throw new BusinessException("É necessário informar pelo menos um resultado de métrica.");
-            }
             registradoPor = "PERSONAL_TRAINER";
         } else {
             alunoResponsavel = alunoRepository.findByUsuario(usuario)
@@ -890,6 +955,9 @@ public class RotinaTreinoService {
         // US-23: Com a execução já registrada, o personal apenas inclui métricas pendentes (com auditoria);
         // data real, duração, RPE e valores existentes são preservados e só podem ser alterados pela correção (US-23)
         boolean somenteInclusaoPendentes = isPersonal && sessao.getDesempenho() != null;
+        if (somenteInclusaoPendentes && resultados.isEmpty()) {
+            throw new BusinessException("É necessário informar pelo menos um resultado de métrica.");
+        }
         List<AuditoriaDesempenho> auditorias = new ArrayList<>();
 
         if (!somenteInclusaoPendentes) {
@@ -926,15 +994,15 @@ public class RotinaTreinoService {
             }
         }
 
-        Set<Metrica> metricasDaRotina = sessao.getRotinaTreino().getMetricas();
+        Set<Metrica> metricasDaSessao = sessao.getMetricas() != null ? sessao.getMetricas() : Set.of();
         Map<String, String> camposInvalidos = new LinkedHashMap<>();
         for (RegistrarResultadoMetricaDTO resDto : resultados) {
             Metrica metrica = metricaRepository.findById(resDto.metricaId())
                     .orElseThrow(() -> new NotFoundException("Métrica com ID " + resDto.metricaId() + " não encontrada."));
 
-            boolean pertenceRotina = metricasDaRotina.stream().anyMatch(m -> m.getId().equals(metrica.getId()));
-            if (!pertenceRotina) {
-                throw new BusinessException("A métrica '" + metrica.getTitulo() + "' não está associada à rotina desta sessão.");
+            boolean pertenceSessao = metricasDaSessao.stream().anyMatch(m -> m.getId().equals(metrica.getId()));
+            if (!pertenceSessao) {
+                throw new BusinessException("A métrica '" + metrica.getTitulo() + "' não está associada a esta sessão.");
             }
 
             // US-18 C5 / US-10 C4: Valida permissão de preenchimento por papel (quemPreenche)
@@ -986,17 +1054,21 @@ public class RotinaTreinoService {
             desempenho.getRegistrosMetricas().add(rm);
         }
 
-        // US-22 Cenários 3 e 4: Métricas obrigatórias do aluno devem ser preenchidas; opcionais e exclusivas do personal não bloqueiam
-        if (!isPersonal) {
+        // US-22 Cenários 3 e 4 / Feature §2.3: Na conclusão inicial (!somenteInclusaoPendentes), valida obrigatórias pendentes do ator;
+        // sessões com 0 métricas (ou apenas opcionais/exclusivas do outro ator) aceitam resultados: [].
+        if (!somenteInclusaoPendentes) {
             Set<UUID> metricasInformadas = resultados.stream()
                     .map(RegistrarResultadoMetricaDTO::metricaId)
                     .collect(Collectors.toSet());
-            metricasDaRotina.stream()
+            ResponsavelPreenchimento responsavelExcluido = isPersonal
+                    ? ResponsavelPreenchimento.ALUNO
+                    : ResponsavelPreenchimento.PERSONAL;
+            metricasDaSessao.stream()
                     .filter(metrica -> Boolean.TRUE.equals(metrica.getAtivo()))
                     .filter(metrica -> Boolean.TRUE.equals(metrica.getObrigatoria()))
-                    .filter(metrica -> metrica.getQuemPreenche() != ResponsavelPreenchimento.PERSONAL)
+                    .filter(metrica -> metrica.getQuemPreenche() != responsavelExcluido)
                     .filter(metrica -> !metricasInformadas.contains(metrica.getId()))
-                    .sorted(Comparator.comparing(Metrica::getTitulo))
+                    .sorted(Comparator.comparing(Metrica::getTitulo, String.CASE_INSENSITIVE_ORDER))
                     .forEach(metrica -> camposInvalidos.put(
                             metrica.getId().toString(),
                             "A métrica '" + metrica.getTitulo() + "' é obrigatória e deve ser preenchida."
@@ -1142,6 +1214,11 @@ public class RotinaTreinoService {
             }
         }
 
+        List<RotinaTreinoResponseDTO.MetricaResumoDTO> metricasSessaoDTO = extrairMetricasSessaoDTO(sessao);
+        List<UUID> metricasIds = metricasSessaoDTO.stream()
+                .map(RotinaTreinoResponseDTO.MetricaResumoDTO::id)
+                .toList();
+
         return new SessaoTreinoResponseDTO(
                 sessao.getId(),
                 sessao.getRotinaTreino().getId(),
@@ -1153,7 +1230,9 @@ public class RotinaTreinoService {
                 sessao.getStatus(),
                 sessao.getConcluidaAluno(),
                 sessao.getValidadaPersonal(),
-                desempenhoDTO
+                desempenhoDTO,
+                metricasIds,
+                metricasSessaoDTO
         );
     }
 
@@ -1161,6 +1240,101 @@ public class RotinaTreinoService {
         return Boolean.TRUE.equals(sessao.getConcluidaAluno()) || sessao.getStatus() == StatusSessaoTreino.CONCLUIDA;
     }
 
+    private Set<Metrica> validarMetricasDaModalidade(PersonalTrainer personal, Long modalidadeId, Collection<UUID> metricasIds) {
+        if (metricasIds == null || metricasIds.isEmpty()) {
+            return new HashSet<>();
+        }
+        Set<Metrica> metricasValidadas = new HashSet<>();
+        for (UUID metricaId : metricasIds) {
+            Metrica metrica = metricaRepository.findByIdAndPersonalTrainerId(metricaId, personal.getId())
+                    .orElseThrow(() -> new NotFoundException("Métrica com ID " + metricaId + " não foi encontrada para este Personal Trainer."));
+
+            if (!metrica.getModalidade().getId().equals(modalidadeId)) {
+                throw new BusinessException("A métrica '" + metrica.getTitulo() + "' não pertence à modalidade selecionada.");
+            }
+            if (Boolean.FALSE.equals(metrica.getAtivo())) {
+                throw new BusinessException("A métrica '" + metrica.getTitulo() + "' está descontinuada e não pode ser vinculada a uma sessão.");
+            }
+            metricasValidadas.add(metrica);
+        }
+        return metricasValidadas;
+    }
+
+    private Set<Metrica> extrairMetricasAtivasCopia(SessaoTreino sessaoOrigem) {
+        if (sessaoOrigem == null || sessaoOrigem.getMetricas() == null || sessaoOrigem.getMetricas().isEmpty()) {
+            return new HashSet<>();
+        }
+        return sessaoOrigem.getMetricas().stream()
+                .filter(m -> Boolean.TRUE.equals(m.getAtivo()))
+                .collect(Collectors.toCollection(HashSet::new));
+    }
+
+    private void sincronizarNotificacoesDaRotina(RotinaTreino rotina) {
+        if (acompanhamentoTreinoService != null && rotina != null && rotina.getAlunos() != null) {
+            for (Aluno a : rotina.getAlunos()) {
+                acompanhamentoTreinoService.sincronizarNotificacaoParaAluno(a);
+            }
+        }
+    }
+
+    private List<RotinaTreinoResponseDTO.MetricaResumoDTO> extrairMetricasSessaoDTO(SessaoTreino sessao) {
+        if (sessao == null || sessao.getMetricas() == null || sessao.getMetricas().isEmpty()) {
+            return List.of();
+        }
+        boolean preservarDescontinuadas = sessao.getStatus() == StatusSessaoTreino.CONCLUIDA;
+        return sessao.getMetricas().stream()
+                .filter(m -> preservarDescontinuadas || Boolean.TRUE.equals(m.getAtivo()))
+                .sorted(Comparator.comparing(Metrica::getTitulo, String.CASE_INSENSITIVE_ORDER))
+                .map(this::toMetricaResumoDTO)
+                .toList();
+    }
+
+    private RotinaTreinoResponseDTO.MetricaResumoDTO toMetricaResumoDTO(Metrica metrica) {
+        return new RotinaTreinoResponseDTO.MetricaResumoDTO(
+                metrica.getId(),
+                metrica.getTitulo(),
+                metrica.getTipo(),
+                metrica.getObrigatoria(),
+                metrica.getQuemPreenche(),
+                metrica.getCampoStrava()
+        );
+    }
+
+    private Map<UUID, List<Metrica>> carregarMetricasAtivasPorRotinaIds(Collection<RotinaTreino> rotinas) {
+        if (rotinas == null || rotinas.isEmpty()) {
+            return Map.of();
+        }
+        List<UUID> ids = rotinas.stream()
+                .map(RotinaTreino::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        List<Object[]> rows = rotinaTreinoRepository.findMetricasAtivasByRotinaIds(ids);
+        if (rows == null || rows.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, Map<UUID, Metrica>> agrupado = new LinkedHashMap<>();
+        for (Object[] row : rows) {
+            if (row == null || row.length < 2 || row[0] == null || row[1] == null) {
+                continue;
+            }
+            UUID rotinaId = (UUID) row[0];
+            Metrica metrica = (Metrica) row[1];
+            agrupado.computeIfAbsent(rotinaId, k -> new LinkedHashMap<>())
+                    .putIfAbsent(metrica.getId(), metrica);
+        }
+        Map<UUID, List<Metrica>> resultado = new LinkedHashMap<>();
+        agrupado.forEach((rotinaId, mapMetricas) -> {
+            List<Metrica> ordenadas = mapMetricas.values().stream()
+                    .sorted(Comparator.comparing(Metrica::getTitulo, String.CASE_INSENSITIVE_ORDER))
+                    .toList();
+            resultado.put(rotinaId, ordenadas);
+        });
+        return resultado;
+    }
 
     private PersonalTrainer obterPersonalLogado(Usuario usuario) {
         return personalTrainerRepository.getByUsuario(usuario)
@@ -1168,6 +1342,18 @@ public class RotinaTreinoService {
     }
 
     private RotinaTreinoResponseDTO toResponseDTO(RotinaTreino rotina) {
+        List<Metrica> metricas = List.of();
+        if (rotina.getId() != null) {
+            metricas = carregarMetricasAtivasPorRotinaIds(List.of(rotina))
+                    .getOrDefault(rotina.getId(), List.of());
+        }
+        if (metricas.isEmpty() && Hibernate.isInitialized(rotina.getSessoes())) {
+            metricas = rotina.getMetricasUtilizadasNasSessoes();
+        }
+        return toResponseDTO(rotina, metricas);
+    }
+
+    private RotinaTreinoResponseDTO toResponseDTO(RotinaTreino rotina, List<Metrica> metricas) {
         List<RotinaTreinoResponseDTO.AlunoResumoDTO> alunosDTO = rotina.getAlunos().stream()
                 .map(aluno -> new RotinaTreinoResponseDTO.AlunoResumoDTO(
                         aluno.getId(),
@@ -1175,15 +1361,10 @@ public class RotinaTreinoService {
                 ))
                 .toList();
 
-        List<RotinaTreinoResponseDTO.MetricaResumoDTO> metricasDTO = rotina.getMetricas().stream()
-                .map(metrica -> new RotinaTreinoResponseDTO.MetricaResumoDTO(
-                        metrica.getId(),
-                        metrica.getTitulo(),
-                        metrica.getTipo(),
-                        metrica.getObrigatoria(),
-                        metrica.getQuemPreenche(),
-                        metrica.getCampoStrava()
-                ))
+        List<RotinaTreinoResponseDTO.MetricaResumoDTO> metricasDTO = (metricas != null ? metricas : List.<Metrica>of()).stream()
+                .filter(m -> Boolean.TRUE.equals(m.getAtivo()))
+                .sorted(Comparator.comparing(Metrica::getTitulo, String.CASE_INSENSITIVE_ORDER))
+                .map(this::toMetricaResumoDTO)
                 .toList();
 
         return new RotinaTreinoResponseDTO(

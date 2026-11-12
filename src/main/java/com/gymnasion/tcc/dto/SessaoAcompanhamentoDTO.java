@@ -19,5 +19,7 @@ public record SessaoAcompanhamentoDTO(
         Boolean temPendenciasPersonal,
         Integer quantidadePendenciasPersonal,
         List<MetricaPendenteDTO> metricasPendentes,
-        DesempenhoResponseDTO desempenho
+        DesempenhoResponseDTO desempenho,
+        List<UUID> metricasIds,
+        List<RotinaTreinoResponseDTO.MetricaResumoDTO> metricas
 ) {}

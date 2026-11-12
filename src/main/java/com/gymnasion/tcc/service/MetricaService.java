@@ -1,9 +1,11 @@
 package com.gymnasion.tcc.service;
 
+import com.gymnasion.tcc.domain.Aluno;
 import com.gymnasion.tcc.domain.Metrica;
 import com.gymnasion.tcc.domain.Modalidade;
 import com.gymnasion.tcc.domain.PersonalTrainer;
 import com.gymnasion.tcc.domain.Usuario;
+import com.gymnasion.tcc.domain.enums.StatusSessaoTreino;
 import com.gymnasion.tcc.domain.enums.TipoMetrica;
 import com.gymnasion.tcc.dto.AtualizarMetricaRequestDTO;
 import com.gymnasion.tcc.dto.CriarMetricaRequestDTO;
@@ -17,7 +19,7 @@ import com.gymnasion.tcc.repository.MetricaRepository;
 import com.gymnasion.tcc.repository.ModalidadeRepository;
 import com.gymnasion.tcc.repository.PersonalTrainerRepository;
 import com.gymnasion.tcc.repository.RegistroMetricaRepository;
-import com.gymnasion.tcc.repository.RotinaTreinoRepository;
+import com.gymnasion.tcc.repository.SessaoTreinoRepository;
 import lombok.AllArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -35,8 +37,9 @@ public class MetricaService {
     private final ModalidadeRepository modalidadeRepository;
     private final PersonalTrainerRepository personalTrainerRepository;
     private final RegistroMetricaRepository registroMetricaRepository;
-    private final RotinaTreinoRepository rotinaTreinoRepository;
+    private final SessaoTreinoRepository sessaoTreinoRepository;
     private final AuditoriaDesempenhoRepository auditoriaDesempenhoRepository;
+    private final AcompanhamentoTreinoService acompanhamentoTreinoService;
 
     @Transactional
     public MetricaResponseDTO criarMetrica(Usuario usuario, CriarMetricaRequestDTO dto) {
@@ -109,7 +112,8 @@ public class MetricaService {
                 .orElseThrow(() -> new NotFoundException("Métrica não encontrada ou não pertence a este Personal Trainer."));
 
         boolean possuiHistorico = registroMetricaRepository.existsByMetricaId(metricaId)
-                || rotinaTreinoRepository.existsByMetricaId(metricaId);
+                || sessaoTreinoRepository.existsByMetricaIdAndStatus(metricaId, StatusSessaoTreino.CONCLUIDA)
+                || auditoriaDesempenhoRepository.existsByMetricaId(metricaId);
 
         if (dto.tipo() != null && dto.tipo() != metrica.getTipo()) {
             if (possuiHistorico) {
@@ -117,6 +121,9 @@ public class MetricaService {
             }
             metrica.setTipo(dto.tipo());
         }
+
+        boolean pendenciaAlterada = (dto.obrigatoria() != null && !dto.obrigatoria().equals(metrica.getObrigatoria()))
+                || (dto.quemPreenche() != null && dto.quemPreenche() != metrica.getQuemPreenche());
 
         if (dto.obrigatoria() != null) {
             metrica.setObrigatoria(dto.obrigatoria());
@@ -147,6 +154,10 @@ public class MetricaService {
 
         metrica = metricaRepository.save(metrica);
 
+        if (pendenciaAlterada) {
+            sincronizarNotificacoes(sessaoTreinoRepository.findAlunosByMetricaId(metricaId));
+        }
+
         Long qtdAlunos = registroMetricaRepository.countAlunosComRegistrosByMetricaId(metricaId);
         return toResponseDTO(metrica, qtdAlunos);
     }
@@ -159,16 +170,31 @@ public class MetricaService {
                 .orElseThrow(() -> new NotFoundException("Métrica não encontrada ou não pertence a este Personal Trainer."));
 
         boolean possuiHistorico = registroMetricaRepository.existsByMetricaId(metricaId)
-                || rotinaTreinoRepository.existsByMetricaId(metricaId)
+                || sessaoTreinoRepository.existsByMetricaIdAndStatus(metricaId, StatusSessaoTreino.CONCLUIDA)
                 || auditoriaDesempenhoRepository.existsByMetricaId(metricaId);
 
+        List<Aluno> alunosImpactados = sessaoTreinoRepository.findAlunosByMetricaIdAndStatus(metricaId, StatusSessaoTreino.PLANEJADA);
+        sessaoTreinoRepository.removerMetricaDeSessoesPlanejadas(metricaId);
+
+        MensagemResponseDTO response;
         if (possuiHistorico) {
             metrica.setAtivo(false);
             metricaRepository.save(metrica);
-            return new MensagemResponseDTO("Métrica descontinuada com sucesso. O histórico foi mantido.");
+            response = new MensagemResponseDTO("Métrica descontinuada com sucesso. O histórico foi mantido.");
         } else {
             metricaRepository.delete(metrica);
-            return new MensagemResponseDTO("Métrica excluída com sucesso!");
+            response = new MensagemResponseDTO("Métrica excluída com sucesso!");
+        }
+
+        sincronizarNotificacoes(alunosImpactados);
+        return response;
+    }
+
+    private void sincronizarNotificacoes(List<Aluno> alunosImpactados) {
+        if (acompanhamentoTreinoService != null && alunosImpactados != null) {
+            for (Aluno aluno : alunosImpactados) {
+                acompanhamentoTreinoService.sincronizarNotificacaoParaAluno(aluno);
+            }
         }
     }
 

@@ -101,6 +101,15 @@ public class PersonalTrainerController {
         return ResponseEntity.ok(alunoService.reativarAluno(alunoId, usuario));
     }
 
+    @PutMapping("/alunos/{alunoId}/modalidades")
+    @Operation(summary = "Atualizar modalidades do aluno", description = "Permite ao Personal Trainer editar de 1 a 3 modalidades vinculadas ao perfil do aluno, bloqueando remoção se houver rotina ou turma ativa na modalidade.")
+    public ResponseEntity<AlunoResponseDTO> atualizarModalidadesAluno(
+            @PathVariable("alunoId") UUID alunoId,
+            @Valid @RequestBody AtualizarModalidadesAlunoRequestDTO dto,
+            @AuthenticationPrincipal Usuario usuario) {
+        return ResponseEntity.ok(alunoService.atualizarModalidades(alunoId, dto, usuario));
+    }
+
     @PostMapping("/alunos/{alunoId}/observacoes-feedbacks")
     @Operation(summary = "Registrar feedback sobre o aluno (US-26 C2)", description = "Permite ao personal responsável registrar um feedback imutável no perfil do aluno.")
     @ApiResponse(responseCode = "201", description = "Feedback registrado com sucesso.")

@@ -56,8 +56,10 @@ public class CorrecaoDesempenhoService {
         }
 
         // US-23 Cenários 2, 6 e 7: Valida todas as métricas antes de aplicar qualquer alteração
-        Map<UUID, Metrica> metricasDaRotina = new HashMap<>();
-        sessao.getRotinaTreino().getMetricas().forEach(metrica -> metricasDaRotina.put(metrica.getId(), metrica));
+        Map<UUID, Metrica> metricasDaSessao = new HashMap<>();
+        if (sessao.getMetricas() != null) {
+            sessao.getMetricas().forEach(metrica -> metricasDaSessao.put(metrica.getId(), metrica));
+        }
 
         List<AlteracaoMetrica> alteracoes = new ArrayList<>();
         Set<UUID> metricasInformadas = new HashSet<>();
@@ -69,9 +71,9 @@ public class CorrecaoDesempenhoService {
             }
 
             RegistroMetrica registroExistente = buscarRegistro(desempenho, resDto.metricaId());
-            Metrica metrica = registroExistente != null ? registroExistente.getMetrica() : metricasDaRotina.get(resDto.metricaId());
+            Metrica metrica = registroExistente != null ? registroExistente.getMetrica() : metricasDaSessao.get(resDto.metricaId());
             if (metrica == null) {
-                throw new BusinessException("A métrica informada não está associada à rotina desta sessão.");
+                throw new BusinessException("A métrica informada não está associada a esta sessão.");
             }
 
             if (registroExistente == null) {
@@ -241,7 +243,9 @@ public class CorrecaoDesempenhoService {
 
         Map<UUID, String> valores = new HashMap<>();
         Map<UUID, Metrica> metricas = new LinkedHashMap<>();
-        sessao.getRotinaTreino().getMetricas().forEach(metrica -> metricas.put(metrica.getId(), metrica));
+        if (sessao.getMetricas() != null) {
+            sessao.getMetricas().forEach(metrica -> metricas.put(metrica.getId(), metrica));
+        }
 
         if (desempenho != null && desempenho.getRegistrosMetricas() != null) {
             for (RegistroMetrica registro : desempenho.getRegistrosMetricas()) {
