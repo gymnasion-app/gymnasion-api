@@ -1,6 +1,7 @@
 package com.gymnasion.tcc.infra;
 
 import com.gymnasion.tcc.exceptions.BusinessException;
+import com.gymnasion.tcc.exceptions.CaptchaInvalidoException;
 import com.gymnasion.tcc.exceptions.ContaBloqueadaException;
 import com.gymnasion.tcc.exceptions.DuplicateResourceException;
 import com.gymnasion.tcc.exceptions.MetricasInvalidasException;
@@ -153,6 +154,18 @@ public class RestExceptionHandler {
         );
         problemDetail.setTitle("Credenciais Inválidas");
         problemDetail.setType(URI.create("https://api.gymnasion.com/errors/credenciais-invalidas"));
+        problemDetail.setProperty("timestamp", Instant.now());
+        return problemDetail;
+    }
+
+    @ExceptionHandler(CaptchaInvalidoException.class)
+    public ProblemDetail handleCaptchaInvalidoException(CaptchaInvalidoException ex) {
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.BAD_REQUEST,
+                ex.getMessage()
+        );
+        problemDetail.setTitle("CAPTCHA Inválido");
+        problemDetail.setType(URI.create("https://api.gymnasion.com/errors/captcha-invalido"));
         problemDetail.setProperty("timestamp", Instant.now());
         return problemDetail;
     }

@@ -266,7 +266,8 @@ class UsuarioServiceTest {
                 "111.222.333-44",
                 "11988887777",
                 1L,
-                true
+                true,
+                "captcha-token"
         );
 
         UsuarioResponseDTO response = usuarioService.criarPersonal(dto);
@@ -289,7 +290,8 @@ class UsuarioServiceTest {
                 "111.222.333-44",
                 "11988887777",
                 1L,
-                false
+                false,
+                "captcha-token"
         );
 
         assertThatThrownBy(() -> usuarioService.criarPersonal(dto))
@@ -309,7 +311,8 @@ class UsuarioServiceTest {
                 "111.222.333-44",
                 "11988887777",
                 1L,
-                true
+                true,
+                "captcha-token"
         );
 
         assertThatThrownBy(() -> usuarioService.criarPersonal(dto))
