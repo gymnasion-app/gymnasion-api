@@ -1,11 +1,13 @@
 package com.gymnasion.tcc.service;
 
+import com.gymnasion.tcc.domain.Aluno;
 import com.gymnasion.tcc.domain.Metrica;
 import com.gymnasion.tcc.domain.Modalidade;
 import com.gymnasion.tcc.domain.PersonalTrainer;
 import com.gymnasion.tcc.domain.Usuario;
 import com.gymnasion.tcc.domain.enums.CampoStrava;
 import com.gymnasion.tcc.domain.enums.ResponsavelPreenchimento;
+import com.gymnasion.tcc.domain.enums.StatusSessaoTreino;
 import com.gymnasion.tcc.domain.enums.TipoMetrica;
 import com.gymnasion.tcc.dto.AtualizarMetricaRequestDTO;
 import com.gymnasion.tcc.dto.CriarMetricaRequestDTO;
@@ -19,7 +21,7 @@ import com.gymnasion.tcc.repository.MetricaRepository;
 import com.gymnasion.tcc.repository.ModalidadeRepository;
 import com.gymnasion.tcc.repository.PersonalTrainerRepository;
 import com.gymnasion.tcc.repository.RegistroMetricaRepository;
-import com.gymnasion.tcc.repository.RotinaTreinoRepository;
+import com.gymnasion.tcc.repository.SessaoTreinoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -53,10 +55,13 @@ class MetricaServiceTest {
     private RegistroMetricaRepository registroMetricaRepository;
 
     @Mock
-    private RotinaTreinoRepository rotinaTreinoRepository;
+    private SessaoTreinoRepository sessaoTreinoRepository;
 
     @Mock
     private AuditoriaDesempenhoRepository auditoriaDesempenhoRepository;
+
+    @Mock
+    private AcompanhamentoTreinoService acompanhamentoTreinoService;
 
     @InjectMocks
     private MetricaService metricaService;
@@ -372,14 +377,15 @@ class MetricaServiceTest {
         when(metricaRepository.findByIdAndPersonalTrainerId(metricaId, personalTrainer.getId()))
                 .thenReturn(Optional.of(m));
         when(registroMetricaRepository.existsByMetricaId(metricaId)).thenReturn(false);
-        when(rotinaTreinoRepository.existsByMetricaId(metricaId)).thenReturn(true);
+        when(sessaoTreinoRepository.existsByMetricaIdAndStatus(metricaId, StatusSessaoTreino.CONCLUIDA)).thenReturn(true);
 
         // Quando: solicita exclusão
         MensagemResponseDTO response = metricaService.excluirMetrica(metricaId, usuarioLogado);
 
-        // Então: marcado como inativo / descontinuado preservando a integridade da rotina
+        // Então: marcado como inativo / descontinuado preservando a integridade de sessões concluídas
         assertThat(m.getAtivo()).isFalse();
         assertThat(response.mensagem()).contains("descontinuada com sucesso");
+        verify(sessaoTreinoRepository).removerMetricaDeSessoesPlanejadas(metricaId);
         verify(metricaRepository, times(1)).save(m);
         verify(metricaRepository, never()).delete(any(Metrica.class));
     }
@@ -400,13 +406,14 @@ class MetricaServiceTest {
         when(metricaRepository.findByIdAndPersonalTrainerId(metricaId, personalTrainer.getId()))
                 .thenReturn(Optional.of(m));
         when(registroMetricaRepository.existsByMetricaId(metricaId)).thenReturn(false);
-        when(rotinaTreinoRepository.existsByMetricaId(metricaId)).thenReturn(false);
+        when(sessaoTreinoRepository.existsByMetricaIdAndStatus(metricaId, StatusSessaoTreino.CONCLUIDA)).thenReturn(false);
 
         // Quando: solicita exclusão
         MensagemResponseDTO response = metricaService.excluirMetrica(metricaId, usuarioLogado);
 
-        // Então: exclusão física executada e mensagem literal
+        // Então: remove antes eventuais vínculos de sessões PLANEJADA e executa exclusão física
         assertThat(response.mensagem()).isEqualTo("Métrica excluída com sucesso!");
+        verify(sessaoTreinoRepository).removerMetricaDeSessoesPlanejadas(metricaId);
         verify(metricaRepository, times(1)).delete(m);
     }
 
@@ -507,9 +514,9 @@ class MetricaServiceTest {
         when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
         when(metricaRepository.findByIdAndPersonalTrainerId(metricaId, personalTrainer.getId()))
                 .thenReturn(Optional.of(m));
-        // Sem registros de desempenho, porém já está vinculada a rotinas de treino
+        // Sem registros de desempenho, porém já vinculada a sessões concluídas
         when(registroMetricaRepository.existsByMetricaId(metricaId)).thenReturn(false);
-        when(rotinaTreinoRepository.existsByMetricaId(metricaId)).thenReturn(true);
+        when(sessaoTreinoRepository.existsByMetricaIdAndStatus(metricaId, StatusSessaoTreino.CONCLUIDA)).thenReturn(true);
 
         AtualizarMetricaRequestDTO dto = new AtualizarMetricaRequestDTO(
                 "Tempo 50m", TipoMetrica.NUMERICO, false, ResponsavelPreenchimento.AMBOS
@@ -536,14 +543,117 @@ class MetricaServiceTest {
         when(metricaRepository.findByIdAndPersonalTrainerId(metricaId, personalTrainer.getId()))
                 .thenReturn(Optional.of(m));
         when(registroMetricaRepository.existsByMetricaId(metricaId)).thenReturn(false);
-        when(rotinaTreinoRepository.existsByMetricaId(metricaId)).thenReturn(false);
+        when(sessaoTreinoRepository.existsByMetricaIdAndStatus(metricaId, StatusSessaoTreino.CONCLUIDA)).thenReturn(false);
         when(auditoriaDesempenhoRepository.existsByMetricaId(metricaId)).thenReturn(true);
 
         MensagemResponseDTO resp = metricaService.excluirMetrica(metricaId, usuarioLogado);
 
         assertThat(resp.mensagem()).isEqualTo("Métrica descontinuada com sucesso. O histórico foi mantido.");
         assertThat(m.getAtivo()).isFalse();
+        verify(sessaoTreinoRepository).removerMetricaDeSessoesPlanejadas(metricaId);
         verify(metricaRepository).save(m);
         verify(metricaRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("RN-017: Métrica vinculada apenas a sessões PLANEJADA remove vínculos antes do delete físico e notifica alunos")
+    void RN017_excluirMetricaApenasSessoesPlanejadas_removeVinculosEExcluiFisicamente() {
+        UUID metricaId = UUID.randomUUID();
+        Metrica m = Metrica.builder()
+                .id(metricaId)
+                .titulo("Sprint 20m")
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .ativo(true)
+                .build();
+        Aluno alunoImpactado = Aluno.builder().id(UUID.randomUUID()).build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
+        when(metricaRepository.findByIdAndPersonalTrainerId(metricaId, personalTrainer.getId()))
+                .thenReturn(Optional.of(m));
+        when(registroMetricaRepository.existsByMetricaId(metricaId)).thenReturn(false);
+        when(sessaoTreinoRepository.existsByMetricaIdAndStatus(metricaId, StatusSessaoTreino.CONCLUIDA)).thenReturn(false);
+        when(auditoriaDesempenhoRepository.existsByMetricaId(metricaId)).thenReturn(false);
+        when(sessaoTreinoRepository.findAlunosByMetricaIdAndStatus(metricaId, StatusSessaoTreino.PLANEJADA))
+                .thenReturn(java.util.List.of(alunoImpactado));
+
+        MensagemResponseDTO resp = metricaService.excluirMetrica(metricaId, usuarioLogado);
+
+        assertThat(resp.mensagem()).isEqualTo("Métrica excluída com sucesso!");
+        var order = org.mockito.Mockito.inOrder(sessaoTreinoRepository, metricaRepository, acompanhamentoTreinoService);
+        order.verify(sessaoTreinoRepository).removerMetricaDeSessoesPlanejadas(metricaId);
+        order.verify(metricaRepository).delete(m);
+        order.verify(acompanhamentoTreinoService).sincronizarNotificacaoParaAluno(alunoImpactado);
+    }
+
+    @Test
+    @DisplayName("US24: Alterar obrigatoria ou quemPreenche resincroniza notificações dos alunos vinculados às sessões")
+    void US24_atualizarObrigatoriaOuQuemPreenche_ressincronizaNotificacao() {
+        UUID metricaId = UUID.randomUUID();
+        Metrica m = Metrica.builder()
+                .id(metricaId)
+                .titulo("Tempo 50m")
+                .tipo(TipoMetrica.TEMPO)
+                .obrigatoria(false)
+                .quemPreenche(ResponsavelPreenchimento.AMBOS)
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .ativo(true)
+                .build();
+        Aluno alunoImpactado = Aluno.builder().id(UUID.randomUUID()).build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
+        when(metricaRepository.findByIdAndPersonalTrainerId(metricaId, personalTrainer.getId()))
+                .thenReturn(Optional.of(m));
+        when(metricaRepository.save(any(Metrica.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessaoTreinoRepository.findAlunosByMetricaId(metricaId)).thenReturn(java.util.List.of(alunoImpactado));
+        when(registroMetricaRepository.countAlunosComRegistrosByMetricaId(metricaId)).thenReturn(1L);
+
+        AtualizarMetricaRequestDTO dto = new AtualizarMetricaRequestDTO(
+                "Tempo 50m",
+                TipoMetrica.TEMPO,
+                true,
+                ResponsavelPreenchimento.PERSONAL
+        );
+
+        metricaService.atualizarMetrica(metricaId, usuarioLogado, dto);
+
+        verify(acompanhamentoTreinoService).sincronizarNotificacaoParaAluno(alunoImpactado);
+    }
+
+    @Test
+    @DisplayName("Atualizar apenas título da métrica não dispara ressincronização de notificações")
+    void atualizarApenasTitulo_naoRessincronizaNotificacao() {
+        UUID metricaId = UUID.randomUUID();
+        Metrica m = Metrica.builder()
+                .id(metricaId)
+                .titulo("Tempo 50m")
+                .tipo(TipoMetrica.TEMPO)
+                .obrigatoria(false)
+                .quemPreenche(ResponsavelPreenchimento.AMBOS)
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .ativo(true)
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
+        when(metricaRepository.findByIdAndPersonalTrainerId(metricaId, personalTrainer.getId()))
+                .thenReturn(Optional.of(m));
+        when(metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndIdNotAndAtivoTrue(
+                personalTrainer.getId(), 1L, "Tempo 100m", metricaId)).thenReturn(false);
+        when(metricaRepository.save(any(Metrica.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(registroMetricaRepository.countAlunosComRegistrosByMetricaId(metricaId)).thenReturn(0L);
+
+        AtualizarMetricaRequestDTO dto = new AtualizarMetricaRequestDTO(
+                "Tempo 100m",
+                TipoMetrica.TEMPO,
+                false,
+                ResponsavelPreenchimento.AMBOS
+        );
+
+        metricaService.atualizarMetrica(metricaId, usuarioLogado, dto);
+
+        verify(sessaoTreinoRepository, never()).findAlunosByMetricaId(any());
+        verify(acompanhamentoTreinoService, never()).sincronizarNotificacaoParaAluno(any());
     }
 }

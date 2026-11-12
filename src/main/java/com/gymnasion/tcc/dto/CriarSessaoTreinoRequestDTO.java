@@ -1,13 +1,17 @@
 package com.gymnasion.tcc.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import java.time.LocalDate;
+import java.util.Set;
+import java.util.UUID;
 
 public record CriarSessaoTreinoRequestDTO(
         @NotNull(message = "A semana é obrigatória.")
-        @Min(value = 1, message = "O número da semana deve ser no mínimo 1.")
+        @Min(value = 1, message = "O número da semana deve estar entre 1 e 104.")
+        @Max(value = 104, message = "O número da semana deve estar entre 1 e 104.")
         @Schema(description = "Número da semana dentro do planejamento da rotina", example = "1")
         Integer semana,
 
@@ -20,5 +24,12 @@ public record CriarSessaoTreinoRequestDTO(
         Integer duracao,
 
         @Schema(description = "Orientações e atividades da sessão de treino", example = "Aquecimento 10 min, 4x100m livre, arrefecimento.")
-        String atividades
-) {}
+        String atividades,
+
+        @Schema(description = "IDs das métricas personalizadas da modalidade vinculadas a esta sessão (0..N)")
+        Set<UUID> metricasIds
+) {
+    public CriarSessaoTreinoRequestDTO(Integer semana, LocalDate dataPlanejada, Integer duracao, String atividades) {
+        this(semana, dataPlanejada, duracao, atividades, null);
+    }
+}

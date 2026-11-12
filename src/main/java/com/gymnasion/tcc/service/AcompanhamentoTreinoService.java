@@ -124,6 +124,11 @@ public class AcompanhamentoTreinoService {
 
             DesempenhoResponseDTO desempenhoDTO = toDesempenhoResponseDTO(sessao.getDesempenho());
 
+            List<RotinaTreinoResponseDTO.MetricaResumoDTO> metricasSessaoDTO = extrairMetricasSessaoDTO(sessao);
+            List<UUID> metricasIds = metricasSessaoDTO.stream()
+                    .map(RotinaTreinoResponseDTO.MetricaResumoDTO::id)
+                    .toList();
+
             sessoesDTO.add(new SessaoAcompanhamentoDTO(
                     sessao.getId(),
                     sessao.getSemana(),
@@ -137,7 +142,9 @@ public class AcompanhamentoTreinoService {
                     !pendenciasSessao.isEmpty(),
                     pendenciasSessao.size(),
                     pendenciasSessao,
-                    desempenhoDTO
+                    desempenhoDTO,
+                    metricasIds,
+                    metricasSessaoDTO
             ));
         }
 
@@ -310,16 +317,35 @@ public class AcompanhamentoTreinoService {
         }
     }
 
+    private List<RotinaTreinoResponseDTO.MetricaResumoDTO> extrairMetricasSessaoDTO(SessaoTreino sessao) {
+        if (sessao == null || sessao.getMetricas() == null || sessao.getMetricas().isEmpty()) {
+            return List.of();
+        }
+        boolean preservarDescontinuadas = sessao.getStatus() == StatusSessaoTreino.CONCLUIDA;
+        return sessao.getMetricas().stream()
+                .filter(m -> preservarDescontinuadas || Boolean.TRUE.equals(m.getAtivo()))
+                .sorted(Comparator.comparing(Metrica::getTitulo, String.CASE_INSENSITIVE_ORDER))
+                .map(m -> new RotinaTreinoResponseDTO.MetricaResumoDTO(
+                        m.getId(),
+                        m.getTitulo(),
+                        m.getTipo(),
+                        m.getObrigatoria(),
+                        m.getQuemPreenche(),
+                        m.getCampoStrava()
+                ))
+                .toList();
+    }
+
     /**
      * Extrai as métricas pendentes do personal em uma sessão específica.
      * Métricas exclusivas do personal (PERSONAL) ou de ambos (AMBOS) que ainda não foram preenchidas no desempenho.
      */
     private List<MetricaPendenteDTO> extrairPendenciasSessao(SessaoTreino sessao) {
-        if (sessao.getRotinaTreino() == null || sessao.getRotinaTreino().getMetricas() == null) {
+        if (sessao == null || sessao.getMetricas() == null || sessao.getMetricas().isEmpty()) {
             return List.of();
         }
 
-        Set<Metrica> metricasRotina = sessao.getRotinaTreino().getMetricas();
+        Set<Metrica> metricasSessao = sessao.getMetricas();
         Desempenho desempenho = sessao.getDesempenho();
 
         Set<UUID> metricasPreenchidas = new HashSet<>();
@@ -332,7 +358,7 @@ public class AcompanhamentoTreinoService {
         }
 
         List<MetricaPendenteDTO> pendentes = new ArrayList<>();
-        for (Metrica m : metricasRotina) {
+        for (Metrica m : metricasSessao) {
             if (Boolean.FALSE.equals(m.getAtivo())) {
                 continue;
             }

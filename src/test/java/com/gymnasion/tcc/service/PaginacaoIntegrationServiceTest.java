@@ -83,17 +83,29 @@ class PaginacaoIntegrationServiceTest {
     }
 
     @Test
-    @DisplayName("RotinaTreinoService: listarPorPersonal paginado retorna Page correta")
+    @DisplayName("RotinaTreinoService: listarPorPersonal paginado retorna Page correta com métricas agregadas em lote")
     void rotinaTreinoService_listarPorPersonal_paginado() {
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personal));
         Pageable pageable = PageRequest.of(0, 10);
         Page<RotinaTreino> pageMock = new PageImpl<>(List.of(rotina), pageable, 1);
         when(rotinaTreinoRepository.findByPersonalTrainerId(personal.getId(), pageable)).thenReturn(pageMock);
+        Metrica carga = Metrica.builder()
+                .id(UUID.randomUUID())
+                .titulo("Carga Total")
+                .tipo(com.gymnasion.tcc.domain.enums.TipoMetrica.NUMERICO)
+                .ativo(true)
+                .build();
+        when(rotinaTreinoRepository.findMetricasAtivasByRotinaIds(List.of(rotina.getId())))
+                .thenReturn(List.<Object[]>of(new Object[]{rotina.getId(), carga}));
 
         Page<RotinaTreinoResponseDTO> resultado = rotinaTreinoService.listarPorPersonal(usuarioPersonal, pageable);
 
         assertThat(resultado.getTotalElements()).isEqualTo(1);
         assertThat(resultado.getContent().get(0).titulo()).isEqualTo("Rotina Hipertrofia");
+        assertThat(resultado.getContent().get(0).metricas())
+                .extracting(RotinaTreinoResponseDTO.MetricaResumoDTO::titulo)
+                .containsExactly("Carga Total");
+        verify(rotinaTreinoRepository).findMetricasAtivasByRotinaIds(List.of(rotina.getId()));
     }
 
     @Test

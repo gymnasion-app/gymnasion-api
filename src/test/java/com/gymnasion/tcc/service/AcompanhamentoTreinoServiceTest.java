@@ -120,7 +120,6 @@ class AcompanhamentoTreinoServiceTest {
                 .frequenciaSemanal(3)
                 .ativo(true)
                 .alunos(new HashSet<>(Set.of(aluno)))
-                .metricas(new HashSet<>(Set.of(metricaPersonal, metricaAluno)))
                 .build();
     }
 
@@ -137,6 +136,7 @@ class AcompanhamentoTreinoServiceTest {
                 .status(StatusSessaoTreino.CONCLUIDA)
                 .concluidaAluno(true)
                 .validadaPersonal(false)
+                .metricas(new HashSet<>(Set.of(metricaPersonal, metricaAluno)))
                 .build();
 
         // Aluno registrou a métrica dele, mas a métrica do personal ficou pendente
@@ -164,6 +164,7 @@ class AcompanhamentoTreinoServiceTest {
                 .status(StatusSessaoTreino.PLANEJADA)
                 .concluidaAluno(false)
                 .validadaPersonal(false)
+                .metricas(new HashSet<>(Set.of(metricaPersonal, metricaAluno)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -207,6 +208,7 @@ class AcompanhamentoTreinoServiceTest {
                 .status(StatusSessaoTreino.CONCLUIDA)
                 .concluidaAluno(true)
                 .validadaPersonal(false)
+                .metricas(new HashSet<>(Set.of(metricaPersonal, metricaAluno)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -252,6 +254,7 @@ class AcompanhamentoTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metricaPersonal, metricaAluno)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -286,6 +289,7 @@ class AcompanhamentoTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.CONCLUIDA)
+                .metricas(new HashSet<>(Set.of(metricaPersonal, metricaAluno)))
                 .build();
 
         Desempenho desempenhoCompleto = Desempenho.builder()
@@ -367,6 +371,7 @@ class AcompanhamentoTreinoServiceTest {
                 .rotinaTreino(rotinaTreino)
                 .semana(1)
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metricaPersonal, metricaAluno)))
                 .build();
 
         when(sessaoTreinoRepository.findByRotinaTreinoIdOrderBySemanaAscDataPlanejadaAsc(rotinaTreino.getId()))
@@ -404,7 +409,6 @@ class AcompanhamentoTreinoServiceTest {
                 .frequenciaSemanal(2)
                 .ativo(true)
                 .alunos(new HashSet<>(Set.of(aluno)))
-                .metricas(new HashSet<>(Set.of(metricaMusculacaoPersonal)))
                 .build();
 
         SessaoTreino sessaoNatacao = SessaoTreino.builder()
@@ -413,6 +417,7 @@ class AcompanhamentoTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 11, 10))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metricaPersonal, metricaAluno)))
                 .build();
 
         SessaoTreino sessaoMusculacao = SessaoTreino.builder()
@@ -422,6 +427,7 @@ class AcompanhamentoTreinoServiceTest {
                 .dataPlanejada(LocalDate.of(2026, 11, 11))
                 .status(StatusSessaoTreino.CONCLUIDA)
                 .concluidaAluno(true)
+                .metricas(new HashSet<>(Set.of(metricaMusculacaoPersonal)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -446,5 +452,48 @@ class AcompanhamentoTreinoServiceTest {
         ArgumentCaptor<Notificacao> notifCaptor = ArgumentCaptor.forClass(Notificacao.class);
         verify(notificacaoRepository).save(notifCaptor.capture());
         assertThat(notifCaptor.getValue().getMensagem()).contains("2 métrica(s) pendente(s)");
+    }
+
+    @Test
+    @DisplayName("Sessão sem métricas (0 métricas) não gera pendências falsas mesmo quando outra sessão da rotina possui métrica do personal")
+    void sessaoSemMetricasNaoGeraPendenciaFalsa() {
+        SessaoTreino sessaoSemMetrica = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .rotinaTreino(rotinaTreino)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 11, 10))
+                .status(StatusSessaoTreino.CONCLUIDA)
+                .concluidaAluno(true)
+                .metricas(new HashSet<>())
+                .build();
+
+        SessaoTreino sessaoComMetrica = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .rotinaTreino(rotinaTreino)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 11, 12))
+                .status(StatusSessaoTreino.CONCLUIDA)
+                .concluidaAluno(true)
+                .metricas(new HashSet<>(Set.of(metricaPersonal)))
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(aluno));
+        when(rotinaTreinoRepository.findByPersonalTrainerIdAndAlunosId(personalTrainer.getId(), aluno.getId()))
+                .thenReturn(List.of(rotinaTreino));
+        when(sessaoTreinoRepository.findByRotinaTreinoIdOrderBySemanaAscDataPlanejadaAsc(rotinaTreino.getId()))
+                .thenReturn(List.of(sessaoSemMetrica, sessaoComMetrica));
+        when(notificacaoRepository.findByUsuarioIdAndTipoAndReferenciaId(usuarioPersonal.getId(), TipoNotificacao.METRICAS_PENDENTES, aluno.getId()))
+                .thenReturn(Optional.empty());
+
+        AcompanhamentoAlunoResponseDTO response = acompanhamentoTreinoService.obterAcompanhamentoAluno(usuarioPersonal, aluno.getId());
+
+        assertThat(response.quantidadeMetricasPendentes()).isEqualTo(1);
+        assertThat(response.sessoes()).hasSize(2);
+        assertThat(response.sessoes().get(0).metricas()).isEmpty();
+        assertThat(response.sessoes().get(0).metricasPendentes()).isEmpty();
+        assertThat(response.sessoes().get(1).metricas()).hasSize(1);
+        assertThat(response.sessoes().get(1).metricasPendentes()).hasSize(1);
     }
 }

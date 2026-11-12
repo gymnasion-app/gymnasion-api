@@ -6,6 +6,7 @@ import com.gymnasion.tcc.exceptions.DuplicateResourceException;
 import com.gymnasion.tcc.exceptions.MetricasInvalidasException;
 import com.gymnasion.tcc.exceptions.NotFoundException;
 import com.gymnasion.tcc.exceptions.RelatorioSemDadosException;
+import jakarta.validation.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -14,6 +15,7 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.net.URI;
@@ -54,6 +56,44 @@ public class RestExceptionHandler {
         problemDetail.setTitle("Requisição Inválida");
         problemDetail.setType(URI.create("https://api.gymnasion.com/errors/requisicao-invalida"));
         problemDetail.setProperty("timestamp", Instant.now());
+        return problemDetail;
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ProblemDetail handleConstraintViolationException(ConstraintViolationException ex) {
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.BAD_REQUEST,
+                "Um ou mais parâmetros apresentam erros de validação."
+        );
+        problemDetail.setTitle("Erro de Validação");
+        problemDetail.setType(URI.create("https://api.gymnasion.com/errors/erro-validacao"));
+        problemDetail.setProperty("timestamp", Instant.now());
+
+        Map<String, String> invalidFields = new HashMap<>();
+        ex.getConstraintViolations().forEach(violation ->
+                invalidFields.put(violation.getPropertyPath().toString(), violation.getMessage())
+        );
+        problemDetail.setProperty("invalidFields", invalidFields);
+        return problemDetail;
+    }
+
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    public ProblemDetail handleHandlerMethodValidationException(HandlerMethodValidationException ex) {
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.BAD_REQUEST,
+                "Um ou mais parâmetros apresentam erros de validação."
+        );
+        problemDetail.setTitle("Erro de Validação");
+        problemDetail.setType(URI.create("https://api.gymnasion.com/errors/erro-validacao"));
+        problemDetail.setProperty("timestamp", Instant.now());
+
+        Map<String, String> invalidFields = new HashMap<>();
+        ex.getParameterValidationResults().forEach(result -> {
+            String paramName = result.getMethodParameter().getParameterName();
+            String key = paramName != null ? paramName : "param";
+            result.getResolvableErrors().forEach(err -> invalidFields.put(key, err.getDefaultMessage()));
+        });
+        problemDetail.setProperty("invalidFields", invalidFields);
         return problemDetail;
     }
 

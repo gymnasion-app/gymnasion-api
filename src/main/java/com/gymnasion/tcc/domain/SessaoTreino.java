@@ -3,7 +3,11 @@ package com.gymnasion.tcc.domain;
 import com.gymnasion.tcc.domain.enums.StatusSessaoTreino;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.BatchSize;
+
 import java.time.LocalDate;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 
 @Entity
@@ -54,4 +58,15 @@ public class SessaoTreino {
 
     @OneToOne(mappedBy = "sessaoTreino", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private Desempenho desempenho;
+
+    @ManyToMany
+    @JoinTable(
+            name = "sessao_treino_metrica",
+            joinColumns = @JoinColumn(name = "sessao_treino_id"),
+            inverseJoinColumns = @JoinColumn(name = "metrica_id")
+    )
+    @OrderBy("titulo ASC")
+    @BatchSize(size = 50)
+    @Builder.Default
+    private Set<Metrica> metricas = new HashSet<>();
 }

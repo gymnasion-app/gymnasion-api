@@ -135,7 +135,6 @@ class RotinaTreinoServiceTest {
                 .frequenciaSemanal(3)
                 .objetivos("Melhorar tempo nos 50m")
                 .alunos(new HashSet<>(Set.of(aluno)))
-                .metricas(new HashSet<>(Set.of(metrica1, metrica2)))
                 .build();
     }
 
@@ -267,6 +266,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(dataPlanejadaOriginal)
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2)))
                 .build();
 
         when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
@@ -338,6 +338,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -415,7 +416,6 @@ class RotinaTreinoServiceTest {
                 .personalTrainer(personalTrainer)
                 .frequenciaSemanal(3)
                 .alunos(new HashSet<>(Set.of(aluno)))
-                .metricas(new HashSet<>(Set.of(metricaExclusivaAluno)))
                 .build();
 
         UUID sessaoId = UUID.randomUUID();
@@ -425,6 +425,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metricaExclusivaAluno)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -470,7 +471,6 @@ class RotinaTreinoServiceTest {
                 .personalTrainer(personalTrainer)
                 .frequenciaSemanal(4)
                 .alunos(new HashSet<>(Set.of(aluno)))
-                .metricas(new HashSet<>(Set.of(metricaExclusivaPersonal)))
                 .build();
 
         UUID sessaoId = UUID.randomUUID();
@@ -480,6 +480,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metricaExclusivaPersonal)))
                 .build();
 
         when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
@@ -518,7 +519,6 @@ class RotinaTreinoServiceTest {
                 .frequenciaSemanal(3)
                 .ativo(true)
                 .alunos(new HashSet<>())
-                .metricas(new HashSet<>(Set.of(metrica1)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -593,7 +593,6 @@ class RotinaTreinoServiceTest {
                 .frequenciaSemanal(2)
                 .ativo(true)
                 .alunos(new HashSet<>())
-                .metricas(new HashSet<>(Set.of(metrica1)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -619,10 +618,6 @@ class RotinaTreinoServiceTest {
     void US11_trava1RotinaAtiva_bloquearCriacaoRotinaSeAlunoJaTemRotinaAtiva() {
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
         when(modalidadeRepository.findById(modalidade.getId())).thenReturn(Optional.of(modalidade));
-        when(metricaRepository.findByPersonalTrainerIdAndModalidadeId(personalTrainer.getId(), modalidade.getId()))
-                .thenReturn(List.of(metrica1));
-        when(metricaRepository.findByIdAndPersonalTrainerId(metrica1.getId(), personalTrainer.getId()))
-                .thenReturn(Optional.of(metrica1));
         when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
                 .thenReturn(Optional.of(aluno));
         when(rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(aluno.getId(), modalidade.getId())).thenReturn(true);
@@ -632,8 +627,7 @@ class RotinaTreinoServiceTest {
                 modalidade.getId(),
                 3,
                 "Objetivo",
-                Set.of(aluno.getId()),
-                Set.of(metrica1.getId())
+                Set.of(aluno.getId())
         );
 
         // Quando & Então: bloqueado na criação da rotina
@@ -645,8 +639,8 @@ class RotinaTreinoServiceTest {
     }
 
     @Test
-    @DisplayName("US10 / US19: Bloquear criação de rotina com métrica descontinuada")
-    void US10_US19_bloquearCriacaoRotinaComMetricaDescontinuada() {
+    @DisplayName("US10 / US19: Bloquear vinculação de métrica descontinuada ao adicionar sessão")
+    void US10_US19_bloquearCriacaoSessaoComMetricaDescontinuada() {
         Metrica metricaDescontinuada = Metrica.builder()
                 .id(UUID.randomUUID())
                 .titulo("Tempo 100m Antigo")
@@ -657,27 +651,25 @@ class RotinaTreinoServiceTest {
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
-        when(modalidadeRepository.findById(modalidade.getId())).thenReturn(Optional.of(modalidade));
-        when(metricaRepository.findByPersonalTrainerIdAndModalidadeId(personalTrainer.getId(), modalidade.getId()))
-                .thenReturn(List.of(metricaDescontinuada));
+        when(rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaTreino.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(rotinaTreino));
         when(metricaRepository.findByIdAndPersonalTrainerId(metricaDescontinuada.getId(), personalTrainer.getId()))
                 .thenReturn(Optional.of(metricaDescontinuada));
 
-        CriarRotinaTreinoRequestDTO dto = new CriarRotinaTreinoRequestDTO(
-                "Nova Rotina com Métrica Inativa",
-                modalidade.getId(),
-                3,
-                "Objetivo",
-                Set.of(aluno.getId()),
+        CriarSessaoTreinoRequestDTO dto = new CriarSessaoTreinoRequestDTO(
+                1,
+                LocalDate.of(2026, 10, 20),
+                60,
+                "Treino com métrica antiga",
                 Set.of(metricaDescontinuada.getId())
         );
 
         // Quando & Então: bloqueado por tentar associar métrica descontinuada
-        assertThatThrownBy(() -> rotinaTreinoService.criarRotinaTreino(usuarioPersonal, dto))
+        assertThatThrownBy(() -> rotinaTreinoService.adicionarSessao(usuarioPersonal, rotinaTreino.getId(), dto))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("está descontinuada e não pode ser vinculada a uma nova rotina.");
+                .hasMessageContaining("descontinuada");
 
-        verify(rotinaTreinoRepository, never()).save(any(RotinaTreino.class));
+        verify(sessaoTreinoRepository, never()).save(any(SessaoTreino.class));
     }
 
     @Test
@@ -697,7 +689,6 @@ class RotinaTreinoServiceTest {
                 .personalTrainer(personalTrainer)
                 .frequenciaSemanal(3)
                 .alunos(new HashSet<>(Set.of(aluno, aluno2)))
-                .metricas(new HashSet<>(Set.of(metrica1)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -744,7 +735,6 @@ class RotinaTreinoServiceTest {
                 .frequenciaSemanal(3)
                 .ativo(false)
                 .alunos(new HashSet<>(Set.of(aluno)))
-                .metricas(new HashSet<>(Set.of(metrica1)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -843,6 +833,7 @@ class RotinaTreinoServiceTest {
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.CONCLUIDA)
                 .concluidaAluno(true)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -888,8 +879,6 @@ class RotinaTreinoServiceTest {
                 .modalidade(modalidade)
                 .personalTrainer(personalTrainer)
                 .build();
-        rotinaTreino.getMetricas().addAll(Set.of(fc, observacao));
-
         UUID sessaoId = UUID.randomUUID();
         SessaoTreino sessao = SessaoTreino.builder()
                 .id(sessaoId)
@@ -897,6 +886,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2, fc, observacao)))
                 .build();
 
         when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
@@ -941,8 +931,6 @@ class RotinaTreinoServiceTest {
                 .modalidade(modalidade)
                 .personalTrainer(personalTrainer)
                 .build();
-        rotinaTreino.getMetricas().add(fc);
-
         UUID sessaoId = UUID.randomUUID();
         SessaoTreino sessao = SessaoTreino.builder()
                 .id(sessaoId)
@@ -950,6 +938,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2, fc)))
                 .build();
 
         when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
@@ -1009,8 +998,6 @@ class RotinaTreinoServiceTest {
                 .personalTrainer(personalTrainer)
                 .ativo(false)
                 .build();
-        rotinaTreino.getMetricas().addAll(Set.of(exclusivaPersonal, descontinuada));
-
         UUID sessaoId = UUID.randomUUID();
         SessaoTreino sessao = SessaoTreino.builder()
                 .id(sessaoId)
@@ -1018,6 +1005,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2, exclusivaPersonal, descontinuada)))
                 .build();
 
         when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
@@ -1076,8 +1064,6 @@ class RotinaTreinoServiceTest {
                 .obrigatoria(true)
                 .quemPreenche(ResponsavelPreenchimento.ALUNO)
                 .build();
-        rotinaTreino.getMetricas().add(obrigatoriaAluno);
-
         UUID sessaoId = UUID.randomUUID();
         SessaoTreino sessao = SessaoTreino.builder()
                 .id(sessaoId)
@@ -1085,6 +1071,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2, obrigatoriaAluno)))
                 .build();
 
         when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
@@ -1134,8 +1121,6 @@ class RotinaTreinoServiceTest {
                 .obrigatoria(true)
                 .ativo(false)
                 .build();
-        rotinaTreino.getMetricas().addAll(Set.of(obrigatoriaPersonal, obrigatoriaDescontinuada));
-
         UUID sessaoId = UUID.randomUUID();
         SessaoTreino sessao = SessaoTreino.builder()
                 .id(sessaoId)
@@ -1143,6 +1128,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2, obrigatoriaPersonal, obrigatoriaDescontinuada)))
                 .build();
 
         when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
@@ -1168,9 +1154,9 @@ class RotinaTreinoServiceTest {
     }
 
     @Test
-    @DisplayName("US10: Personal continua obrigado a informar ao menos um resultado de métrica")
-    void US10_personalDeveInformarAoMenosUmResultado() {
-        // Dado: sessão da rotina do personal
+    @DisplayName("US10 / Sessão sem métricas: Personal conclui sessão com resultados vazios na execução inicial e exige resultado apenas em inclusão de pendentes")
+    void US10_personalPodeConcluirSemResultadosEExigeNaInclusaoDePendentes() {
+        // Dado: sessão planejada sem métricas obrigatórias do personal
         UUID sessaoId = UUID.randomUUID();
         SessaoTreino sessao = SessaoTreino.builder()
                 .id(sessaoId)
@@ -1178,6 +1164,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>())
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -1185,6 +1172,7 @@ class RotinaTreinoServiceTest {
                 .thenReturn(Optional.of(sessao));
         when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
                 .thenReturn(Optional.of(aluno));
+        when(sessaoTreinoRepository.save(any(SessaoTreino.class))).thenAnswer(i -> i.getArgument(0));
 
         RegistrarExecucaoSessaoRequestDTO dto = new RegistrarExecucaoSessaoRequestDTO(
                 LocalDate.of(2026, 10, 20),
@@ -1194,12 +1182,15 @@ class RotinaTreinoServiceTest {
                 List.of()
         );
 
-        // Quando & Então
+        SessaoTreinoResponseDTO response = rotinaTreinoService.registrarExecucao(usuarioPersonal, sessaoId, dto);
+        assertThat(response.status()).isEqualTo(StatusSessaoTreino.CONCLUIDA);
+        assertThat(response.desempenho().registradoPor()).isEqualTo("PERSONAL_TRAINER");
+        assertThat(response.desempenho().metricas()).isEmpty();
+
+        // E quando a sessão já tem desempenho (somenteInclusaoPendentes = true), continua exigindo ao menos 1 resultado
         assertThatThrownBy(() -> rotinaTreinoService.registrarExecucao(usuarioPersonal, sessaoId, dto))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("É necessário informar pelo menos um resultado de métrica.");
-
-        verify(sessaoTreinoRepository, never()).save(any(SessaoTreino.class));
     }
 
     @Test
@@ -1214,6 +1205,7 @@ class RotinaTreinoServiceTest {
                 .duracao(60)
                 .atividades("Treino de Nado Crawl")
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2)))
                 .build();
 
         SessaoTreino s2 = SessaoTreino.builder()
@@ -1224,6 +1216,7 @@ class RotinaTreinoServiceTest {
                 .duracao(45)
                 .atividades("Treino de Nado Costas")
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1)))
                 .build();
 
         SessaoTreino s3 = SessaoTreino.builder()
@@ -1234,6 +1227,7 @@ class RotinaTreinoServiceTest {
                 .duracao(50)
                 .atividades("Treino de Resistência")
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica2)))
                 .build();
 
         rotinaTreino.setSessoes(new ArrayList<>(List.of(s1, s2, s3)));
@@ -1270,13 +1264,18 @@ class RotinaTreinoServiceTest {
         RotinaTreino novaRotinaSalva = rotinaCaptor.getValue();
         assertThat(novaRotinaSalva.getAtivo()).isTrue();
         assertThat(novaRotinaSalva.getAlunos()).containsExactly(aluno);
-        assertThat(novaRotinaSalva.getMetricas()).containsExactlyInAnyOrder(metrica1, metrica2);
         assertThat(novaRotinaSalva.getSessoes()).hasSize(3);
+        assertThat(response.metricas())
+                .extracting(RotinaTreinoResponseDTO.MetricaResumoDTO::id)
+                .containsExactlyInAnyOrder(metrica1.getId(), metrica2.getId());
 
-        // Verifica o recálculo das datas (mantendo intervalos originais)
+        // Verifica o recálculo das datas (mantendo intervalos originais) e cópia das métricas por sessão
         SessaoTreino ns1 = novaRotinaSalva.getSessoes().get(0);
         SessaoTreino ns2 = novaRotinaSalva.getSessoes().get(1);
         SessaoTreino ns3 = novaRotinaSalva.getSessoes().get(2);
+        assertThat(ns1.getMetricas()).containsExactlyInAnyOrder(metrica1, metrica2);
+        assertThat(ns2.getMetricas()).containsExactlyInAnyOrder(metrica1);
+        assertThat(ns3.getMetricas()).containsExactlyInAnyOrder(metrica2);
 
         assertThat(ns1.getDataPlanejada()).isEqualTo(LocalDate.of(2026, 11, 2));
         assertThat(ns1.getSemana()).isEqualTo(1);
@@ -1596,6 +1595,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -1635,6 +1635,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -1682,8 +1683,6 @@ class RotinaTreinoServiceTest {
                 .quemPreenche(ResponsavelPreenchimento.AMBOS)
                 .build();
 
-        rotinaTreino.getMetricas().addAll(List.of(fc, texto));
-
         UUID sessaoId = UUID.randomUUID();
         SessaoTreino sessao = SessaoTreino.builder()
                 .id(sessaoId)
@@ -1691,6 +1690,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2, fc, texto)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -1739,6 +1739,7 @@ class RotinaTreinoServiceTest {
                 .semana(1)
                 .dataPlanejada(LocalDate.of(2026, 10, 20))
                 .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -1953,8 +1954,6 @@ class RotinaTreinoServiceTest {
                 .personalTrainer(personalTrainer)
                 .quemPreenche(ResponsavelPreenchimento.PERSONAL)
                 .build();
-        rotinaTreino.getMetricas().add(exclusivaPersonal);
-
         UUID sessaoId = UUID.randomUUID();
         SessaoTreino sessao = SessaoTreino.builder()
                 .id(sessaoId)
@@ -1965,6 +1964,7 @@ class RotinaTreinoServiceTest {
                 .duracao(55)
                 .status(StatusSessaoTreino.CONCLUIDA)
                 .concluidaAluno(true)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2, exclusivaPersonal)))
                 .build();
         Desempenho desempenho = Desempenho.builder()
                 .id(UUID.randomUUID())
@@ -2027,6 +2027,7 @@ class RotinaTreinoServiceTest {
                 .dataReal(LocalDate.of(2026, 10, 22))
                 .status(StatusSessaoTreino.CONCLUIDA)
                 .concluidaAluno(true)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2)))
                 .build();
         Desempenho desempenho = Desempenho.builder()
                 .id(UUID.randomUUID())
@@ -2090,7 +2091,6 @@ class RotinaTreinoServiceTest {
                 .frequenciaSemanal(3)
                 .ativo(true)
                 .alunos(new HashSet<>())
-                .metricas(new HashSet<>(Set.of(metrica1)))
                 .build();
 
         Turma turma = Turma.builder()
@@ -2399,8 +2399,6 @@ class RotinaTreinoServiceTest {
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
         when(rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaTreino.getId(), personalTrainer.getId()))
                 .thenReturn(Optional.of(rotinaTreino));
-        when(metricaRepository.findByIdAndPersonalTrainerId(metrica1.getId(), personalTrainer.getId()))
-                .thenReturn(Optional.of(metrica1));
         when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
                 .thenReturn(Optional.of(aluno));
         when(rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrueAndIdNot(aluno.getId(), modalidade.getId(), rotinaTreino.getId()))
@@ -2411,8 +2409,7 @@ class RotinaTreinoServiceTest {
                 "Rotina Atualizada",
                 5,
                 "Novos objetivos",
-                Set.of(aluno.getId()),
-                Set.of(metrica1.getId())
+                Set.of(aluno.getId())
         );
 
         RotinaTreinoResponseDTO response = rotinaTreinoService.atualizarRotina(usuarioPersonal, rotinaTreino.getId(), dto);
@@ -2445,8 +2442,6 @@ class RotinaTreinoServiceTest {
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
         when(rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaTreino.getId(), personalTrainer.getId()))
                 .thenReturn(Optional.of(rotinaTreino));
-        when(metricaRepository.findByIdAndPersonalTrainerId(metrica1.getId(), personalTrainer.getId()))
-                .thenReturn(Optional.of(metrica1));
         when(alunoRepository.findByIdAndPersonalId(aluno2.getId(), personalTrainer.getId()))
                 .thenReturn(Optional.of(aluno2));
         when(rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrueAndIdNot(aluno2.getId(), modalidade.getId(), rotinaTreino.getId()))
@@ -2456,8 +2451,7 @@ class RotinaTreinoServiceTest {
                 "Rotina Atualizada",
                 5,
                 "Novos objetivos",
-                Set.of(aluno2.getId()),
-                Set.of(metrica1.getId())
+                Set.of(aluno2.getId())
         );
 
         assertThatThrownBy(() -> rotinaTreinoService.atualizarRotina(usuarioPersonal, rotinaTreino.getId(), dto))
@@ -2682,7 +2676,15 @@ class RotinaTreinoServiceTest {
                 .personalTrainer(personalTrainer)
                 .ativo(false)
                 .build();
-        rotinaTreino.getMetricas().add(metricaDescontinuada);
+        SessaoTreino sessaoOrigem = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .rotinaTreino(rotinaTreino)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 10, 1))
+                .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2, metricaDescontinuada)))
+                .build();
+        rotinaTreino.setSessoes(new ArrayList<>(List.of(sessaoOrigem)));
 
         ReutilizarRotinaRequestDTO dto = new ReutilizarRotinaRequestDTO(
                 aluno.getId(), LocalDate.of(2026, 11, 2), null, null
@@ -2701,9 +2703,10 @@ class RotinaTreinoServiceTest {
         rotinaTreinoService.reutilizarRotina(usuarioPersonal, rotinaTreino.getId(), dto);
 
         RotinaTreino salva = rotinaCaptor.getValue();
-        assertThat(salva.getMetricas())
+        assertThat(salva.getSessoes()).hasSize(1);
+        assertThat(salva.getSessoes().get(0).getMetricas())
                 .extracting(Metrica::getTitulo)
-                .contains("Tempo 50m", "Braçadas")
+                .containsExactlyInAnyOrder("Tempo 50m", "Braçadas")
                 .doesNotContain("Métrica Obsoleta");
     }
 
@@ -2758,6 +2761,7 @@ class RotinaTreinoServiceTest {
                 .id(sessaoId)
                 .rotinaTreino(rotinaTreino)
                 .dataPlanejada(dataFutura)
+                .metricas(new HashSet<>(Set.of(metrica1)))
                 .build();
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
@@ -2793,10 +2797,6 @@ class RotinaTreinoServiceTest {
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
         when(modalidadeRepository.findById(2L)).thenReturn(Optional.of(musculacao));
-        when(metricaRepository.findByPersonalTrainerIdAndModalidadeId(personalTrainer.getId(), 2L))
-                .thenReturn(List.of(metricaMusculacao));
-        when(metricaRepository.findByIdAndPersonalTrainerId(metricaMusculacao.getId(), personalTrainer.getId()))
-                .thenReturn(Optional.of(metricaMusculacao));
         when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
                 .thenReturn(Optional.of(aluno));
         when(rotinaTreinoRepository.existsByAlunoIdAndModalidadeIdAndAtivoTrue(aluno.getId(), 2L))
@@ -2812,8 +2812,7 @@ class RotinaTreinoServiceTest {
                 2L,
                 2,
                 "Suporte de força para natação",
-                Set.of(aluno.getId()),
-                Set.of(metricaMusculacao.getId())
+                Set.of(aluno.getId())
         );
 
         RotinaTreinoResponseDTO response = rotinaTreinoService.criarRotinaTreino(usuarioPersonal, dto);
@@ -2838,10 +2837,6 @@ class RotinaTreinoServiceTest {
 
         when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
         when(modalidadeRepository.findById(3L)).thenReturn(Optional.of(corrida));
-        when(metricaRepository.findByPersonalTrainerIdAndModalidadeId(personalTrainer.getId(), 3L))
-                .thenReturn(List.of(metricaCorrida));
-        when(metricaRepository.findByIdAndPersonalTrainerId(metricaCorrida.getId(), personalTrainer.getId()))
-                .thenReturn(Optional.of(metricaCorrida));
         when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId()))
                 .thenReturn(Optional.of(aluno));
 
@@ -2850,8 +2845,7 @@ class RotinaTreinoServiceTest {
                 3L,
                 3,
                 "Resistência",
-                Set.of(aluno.getId()),
-                Set.of(metricaCorrida.getId())
+                Set.of(aluno.getId())
         );
 
         assertThatThrownBy(() -> rotinaTreinoService.criarRotinaTreino(usuarioPersonal, dto))
@@ -2859,5 +2853,305 @@ class RotinaTreinoServiceTest {
                 .hasMessage("O aluno Aluno Lucas não possui a modalidade 'Corrida' vinculada ao seu perfil.");
 
         verify(rotinaTreinoRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Sessão 0..N métricas: adicionarSessao aceita 0 ou N métricas e editarSessaoFutura preserva com null e limpa com lista vazia")
+    void sessao_adicionarEAtualizarMetricas_preservaComNullELimpaComVazio() {
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaTreino.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(rotinaTreino));
+        when(metricaRepository.findByIdAndPersonalTrainerId(metrica1.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(metrica1));
+        when(sessaoTreinoRepository.save(any(SessaoTreino.class))).thenAnswer(inv -> {
+            SessaoTreino s = inv.getArgument(0);
+            if (s.getId() == null) s.setId(UUID.randomUUID());
+            return s;
+        });
+
+        // 0 métricas
+        SessaoTreinoResponseDTO sessaoSemMetrica = rotinaTreinoService.adicionarSessao(
+                usuarioPersonal, rotinaTreino.getId(),
+                new CriarSessaoTreinoRequestDTO(1, LocalDate.of(2026, 10, 20), 45, "Treino livre")
+        );
+        assertThat(sessaoSemMetrica.metricasIds()).isEmpty();
+        assertThat(sessaoSemMetrica.metricas()).isEmpty();
+
+        // N métricas
+        SessaoTreinoResponseDTO sessaoComMetrica = rotinaTreinoService.adicionarSessao(
+                usuarioPersonal, rotinaTreino.getId(),
+                new CriarSessaoTreinoRequestDTO(1, LocalDate.of(2026, 10, 22), 60, "Tiro 50m", Set.of(metrica1.getId()))
+        );
+        assertThat(sessaoComMetrica.metricasIds()).containsExactly(metrica1.getId());
+        assertThat(sessaoComMetrica.metricas()).extracting(RotinaTreinoResponseDTO.MetricaResumoDTO::titulo)
+                .containsExactly("Tempo 50m");
+
+        // Editar com metricasIds == null -> preserva métricas existentes e não resincroniza notificações
+        SessaoTreino sessaoExistente = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .rotinaTreino(rotinaTreino)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 10, 22))
+                .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica1)))
+                .build();
+        when(sessaoTreinoRepository.findByIdAndPersonalTrainerId(sessaoExistente.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(sessaoExistente));
+        clearInvocations(acompanhamentoTreinoService);
+
+        SessaoTreinoResponseDTO editPreservando = rotinaTreinoService.editarSessaoFutura(
+                usuarioPersonal, sessaoExistente.getId(),
+                new AtualizarSessaoTreinoRequestDTO(1, LocalDate.of(2026, 10, 23), 50, "Ajuste")
+        );
+        assertThat(editPreservando.metricasIds()).containsExactly(metrica1.getId());
+        verify(acompanhamentoTreinoService, never()).sincronizarNotificacaoParaAluno(any());
+
+        // Editar com metricasIds == [] -> limpa métricas e resincroniza notificações
+        SessaoTreinoResponseDTO editLimpando = rotinaTreinoService.editarSessaoFutura(
+                usuarioPersonal, sessaoExistente.getId(),
+                new AtualizarSessaoTreinoRequestDTO(1, LocalDate.of(2026, 10, 23), 50, "Ajuste", Set.of())
+        );
+        assertThat(editLimpando.metricasIds()).isEmpty();
+        assertThat(editLimpando.metricas()).isEmpty();
+        verify(acompanhamentoTreinoService).sincronizarNotificacaoParaAluno(aluno);
+    }
+
+    @Test
+    @DisplayName("Sessão em rotina encerrada não permite adição, edição ou duplicação")
+    void rotinaEncerrada_bloqueiaEdicaoEDuplicacaoDeSessao() {
+        RotinaTreino rotinaEncerrada = RotinaTreino.builder()
+                .id(UUID.randomUUID())
+                .titulo("Encerrada")
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .frequenciaSemanal(2)
+                .ativo(false)
+                .alunos(new HashSet<>(Set.of(aluno)))
+                .build();
+        SessaoTreino sessao = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .rotinaTreino(rotinaEncerrada)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 10, 10))
+                .status(StatusSessaoTreino.PLANEJADA)
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(sessaoTreinoRepository.findByIdAndPersonalTrainerId(sessao.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(sessao));
+
+        assertThatThrownBy(() -> rotinaTreinoService.editarSessaoFutura(
+                usuarioPersonal, sessao.getId(),
+                new AtualizarSessaoTreinoRequestDTO(1, LocalDate.of(2026, 10, 12), 40, "X", Set.of())
+        )).isInstanceOf(BusinessException.class)
+          .hasMessage("Não é possível editar sessões de uma rotina de treino já encerrada.");
+
+        assertThatThrownBy(() -> rotinaTreinoService.duplicarSessao(
+                usuarioPersonal, sessao.getId(),
+                new DuplicarSessaoTreinoRequestDTO(2, LocalDate.of(2026, 10, 17))
+        )).isInstanceOf(BusinessException.class)
+          .hasMessage("Não é possível duplicar sessões de uma rotina de treino já encerrada.");
+    }
+
+    @Test
+    @DisplayName("Duplicar Sessão: copia atividades, duração e apenas métricas ativas em novo conjunto")
+    void duplicarSessao_copiaMetricasAtivasParaSemanaDestino() {
+        Metrica descontinuada = Metrica.builder()
+                .id(UUID.randomUUID())
+                .titulo("Obsoleta")
+                .tipo(TipoMetrica.NUMERICO)
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .ativo(false)
+                .build();
+        SessaoTreino origem = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .rotinaTreino(rotinaTreino)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 10, 20))
+                .dataReal(LocalDate.of(2026, 10, 20))
+                .duracao(65)
+                .atividades("Técnica e resistência")
+                .status(StatusSessaoTreino.CONCLUIDA)
+                .concluidaAluno(true)
+                .validadaPersonal(true)
+                .metricas(new HashSet<>(Set.of(metrica1, metrica2, descontinuada)))
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(sessaoTreinoRepository.findByIdAndPersonalTrainerId(origem.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(origem));
+        ArgumentCaptor<SessaoTreino> sessaoCaptor = ArgumentCaptor.forClass(SessaoTreino.class);
+        when(sessaoTreinoRepository.save(sessaoCaptor.capture())).thenAnswer(inv -> {
+            SessaoTreino s = inv.getArgument(0);
+            s.setId(UUID.randomUUID());
+            return s;
+        });
+
+        SessaoTreinoResponseDTO resp = rotinaTreinoService.duplicarSessao(
+                usuarioPersonal, origem.getId(),
+                new DuplicarSessaoTreinoRequestDTO(104, LocalDate.of(2026, 11, 1))
+        );
+
+        SessaoTreino salva = sessaoCaptor.getValue();
+        assertThat(salva.getSemana()).isEqualTo(104);
+        assertThat(salva.getDataPlanejada()).isEqualTo(LocalDate.of(2026, 11, 1));
+        assertThat(salva.getDuracao()).isEqualTo(65);
+        assertThat(salva.getAtividades()).isEqualTo("Técnica e resistência");
+        assertThat(salva.getStatus()).isEqualTo(StatusSessaoTreino.PLANEJADA);
+        assertThat(salva.getConcluidaAluno()).isFalse();
+        assertThat(salva.getValidadaPersonal()).isFalse();
+        assertThat(salva.getDataReal()).isNull();
+        assertThat(salva.getMetricas()).isNotSameAs(origem.getMetricas());
+        assertThat(salva.getMetricas()).containsExactlyInAnyOrder(metrica1, metrica2);
+        assertThat(resp.metricasIds()).containsExactlyInAnyOrder(metrica1.getId(), metrica2.getId());
+        verify(acompanhamentoTreinoService).sincronizarNotificacaoParaAluno(aluno);
+    }
+
+    @Test
+    @DisplayName("Duplicar Semana: clona aditivamente para N+1 com +7 dias, valida semana vazia e limite 103")
+    void duplicarSemana_clonaAditivamenteEValidaLimites() {
+        Metrica descontinuada = Metrica.builder()
+                .id(UUID.randomUUID())
+                .titulo("Obsoleta")
+                .tipo(TipoMetrica.NUMERICO)
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .ativo(false)
+                .build();
+        SessaoTreino sOrigem = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .rotinaTreino(rotinaTreino)
+                .semana(103)
+                .dataPlanejada(LocalDate.of(2026, 10, 20))
+                .duracao(50)
+                .atividades("Série principal")
+                .status(StatusSessaoTreino.CONCLUIDA)
+                .metricas(new HashSet<>(Set.of(metrica1, descontinuada)))
+                .build();
+        SessaoTreino existenteDestino = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .rotinaTreino(rotinaTreino)
+                .semana(104)
+                .dataPlanejada(LocalDate.of(2026, 10, 29))
+                .duracao(30)
+                .atividades("Soltura")
+                .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metrica2)))
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(rotinaTreinoRepository.findByIdAndPersonalTrainerId(rotinaTreino.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(rotinaTreino));
+        when(sessaoTreinoRepository.findByRotinaTreinoIdAndSemanaOrderByDataPlanejadaAsc(rotinaTreino.getId(), 103))
+                .thenReturn(List.of(sOrigem));
+        when(sessaoTreinoRepository.findByRotinaTreinoIdOrderBySemanaAscDataPlanejadaAsc(rotinaTreino.getId()))
+                .thenReturn(List.of(sOrigem, existenteDestino));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SessaoTreino>> listCaptor = ArgumentCaptor.forClass(List.class);
+        when(sessaoTreinoRepository.saveAll(listCaptor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        PlanejamentoRotinaResponseDTO planejamento = rotinaTreinoService.duplicarSemana(
+                usuarioPersonal, rotinaTreino.getId(), 103
+        );
+
+        assertThat(listCaptor.getValue()).singleElement().satisfies(nova -> {
+            assertThat(nova.getSemana()).isEqualTo(104);
+            assertThat(nova.getDataPlanejada()).isEqualTo(LocalDate.of(2026, 10, 27));
+            assertThat(nova.getStatus()).isEqualTo(StatusSessaoTreino.PLANEJADA);
+            assertThat(nova.getMetricas()).containsExactly(metrica1);
+        });
+        assertThat(planejamento.semanas()).extracting(PlanejamentoRotinaResponseDTO.SemanaPlanejamentoDTO::numeroSemana)
+                .containsExactly(103, 104);
+        verify(acompanhamentoTreinoService).sincronizarNotificacaoParaAluno(aluno);
+
+        // Semana 104 fora do limite (max 103)
+        assertThatThrownBy(() -> rotinaTreinoService.duplicarSemana(usuarioPersonal, rotinaTreino.getId(), 104))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("A semana de origem deve estar entre 1 e 103.");
+
+        // Semana sem sessões
+        when(sessaoTreinoRepository.findByRotinaTreinoIdAndSemanaOrderByDataPlanejadaAsc(rotinaTreino.getId(), 5))
+                .thenReturn(List.of());
+        assertThatThrownBy(() -> rotinaTreinoService.duplicarSemana(usuarioPersonal, rotinaTreino.getId(), 5))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("A semana selecionada não possui sessões para duplicar.");
+    }
+
+    @Test
+    @DisplayName("Execução 0 métricas: Aluno conclui sessão sem métricas com resultados vazios, mas respeita obrigatórias da sessão")
+    void execucaoSessaoSemMetricas_alunoConcluiComResultadosVaziosEObrigatoriaBloqueada() {
+        UUID sessaoZeroId = UUID.randomUUID();
+        SessaoTreino sessaoZero = SessaoTreino.builder()
+                .id(sessaoZeroId)
+                .rotinaTreino(rotinaTreino)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 10, 20))
+                .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>())
+                .build();
+
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(sessaoTreinoRepository.findByIdAndAlunoId(sessaoZeroId, aluno.getId())).thenReturn(Optional.of(sessaoZero));
+        when(sessaoTreinoRepository.save(any(SessaoTreino.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        SessaoTreinoResponseDTO resp = rotinaTreinoService.registrarExecucao(
+                usuarioAluno, sessaoZeroId,
+                new RegistrarExecucaoSessaoRequestDTO(LocalDate.of(2026, 10, 20), 40, 6, null, List.of())
+        );
+        assertThat(resp.status()).isEqualTo(StatusSessaoTreino.CONCLUIDA);
+        assertThat(resp.desempenho().nivelCansaco()).isEqualTo(6);
+        assertThat(resp.desempenho().metricas()).isEmpty();
+
+        // Personal com métrica obrigatória exclusiva do personal na sessão deve rejeitar resultados vazios
+        Metrica obrigatoriaPersonal = Metrica.builder()
+                .id(UUID.randomUUID())
+                .titulo("Observação Técnica")
+                .tipo(TipoMetrica.TEXTO)
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .obrigatoria(true)
+                .quemPreenche(ResponsavelPreenchimento.PERSONAL)
+                .build();
+        SessaoTreino sessaoComObrigatoria = SessaoTreino.builder()
+                .id(UUID.randomUUID())
+                .rotinaTreino(rotinaTreino)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 10, 20))
+                .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(obrigatoriaPersonal)))
+                .build();
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(sessaoTreinoRepository.findByIdAndPersonalTrainerId(sessaoComObrigatoria.getId(), personalTrainer.getId()))
+                .thenReturn(Optional.of(sessaoComObrigatoria));
+        when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId())).thenReturn(Optional.of(aluno));
+
+        assertThatThrownBy(() -> rotinaTreinoService.registrarExecucao(
+                usuarioPersonal, sessaoComObrigatoria.getId(),
+                new RegistrarExecucaoSessaoRequestDTO(LocalDate.of(2026, 10, 20), 50, null, aluno.getId(), List.of())
+        )).isInstanceOf(MetricasInvalidasException.class);
+    }
+
+    @Test
+    @DisplayName("Listar rotinas por personal carrega resumo agregado de métricas ativas em lote")
+    void listarPorPersonal_carregaMetricasAgregadasEmLote() {
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(rotinaTreinoRepository.findByPersonalTrainerId(personalTrainer.getId())).thenReturn(List.of(rotinaTreino));
+        when(rotinaTreinoRepository.findMetricasAtivasByRotinaIds(List.of(rotinaTreino.getId())))
+                .thenReturn(List.of(
+                        new Object[]{rotinaTreino.getId(), metrica2},
+                        new Object[]{rotinaTreino.getId(), metrica1}
+                ));
+
+        List<RotinaTreinoResponseDTO> resp = rotinaTreinoService.listarPorPersonal(usuarioPersonal);
+
+        assertThat(resp).singleElement().satisfies(r -> {
+            assertThat(r.metricas()).extracting(RotinaTreinoResponseDTO.MetricaResumoDTO::titulo)
+                    .containsExactly("Braçadas", "Tempo 50m");
+            assertThat(r.metricas()).extracting(RotinaTreinoResponseDTO.MetricaResumoDTO::id)
+                    .containsExactly(metrica2.getId(), metrica1.getId());
+        });
+        verify(rotinaTreinoRepository).findMetricasAtivasByRotinaIds(List.of(rotinaTreino.getId()));
     }
 }

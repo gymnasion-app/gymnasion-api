@@ -17,8 +17,8 @@ Spring Data JPA repository interfaces providing persistence queries, multi-tenan
 - `[PreferenciaUsuarioRepository.java:PreferenciaUsuarioRepository]` (`findByUsuario`, `findByUsuarioId`)
 - `[RegistroMetricaRepository.java:RegistroMetricaRepository]` (`existsByMetricaId`, `countAlunosComRegistrosByMetricaId`)
 - `[RelatorioRepository.java:RelatorioRepository]`
-- `[RotinaTreinoRepository.java:RotinaTreinoRepository]` (`findByPersonalTrainerId`, `findByPersonalTrainerIdAndAlunosId`, `findByAlunosId`, `findByIdAndPersonalTrainerId`, `findByPersonalTrainerIdAndModalidadeId`, `existsByAlunoIdAndAtivoTrue`, `existsByAlunoIdAndAtivoTrueAndIdNot`, `existsByAlunoIdAndModalidadeIdAndAtivoTrue`, `existsByAlunoIdAndModalidadeIdAndAtivoTrueAndIdNot`, `findByAlunoIdAndModalidadeIdAndAtivoTrue`, `existsByMetricaId`)
-- `[SessaoTreinoRepository.java:SessaoTreinoRepository]` (`findByRotinaTreinoIdOrderBySemanaAscDataPlanejadaAsc`, `findByRotinaTreinoIdAndStatusOrderByDataRealDesc`, `findByIdAndPersonalTrainerId`, `findByIdAndAlunoId`, `findByAlunoIdAndStatusOrderByDataRealDesc`)
+- `[RotinaTreinoRepository.java:RotinaTreinoRepository]` (`findByPersonalTrainerId`, `findByPersonalTrainerIdAndAlunosId`, `findByAlunosId`, `findByIdAndPersonalTrainerId`, `findByPersonalTrainerIdAndModalidadeId`, `existsByAlunoIdAndAtivoTrue`, `existsByAlunoIdAndAtivoTrueAndIdNot`, `existsByAlunoIdAndModalidadeIdAndAtivoTrue`, `existsByAlunoIdAndModalidadeIdAndAtivoTrueAndIdNot`, `findByAlunoIdAndModalidadeIdAndAtivoTrue`, `findMetricasAtivasByRotinaIds`)
+- `[SessaoTreinoRepository.java:SessaoTreinoRepository]` (`findByRotinaTreinoIdOrderBySemanaAscDataPlanejadaAsc`, `findByRotinaTreinoIdAndSemanaOrderByDataPlanejadaAsc`, `findByRotinaTreinoIdAndStatusOrderByDataRealDesc`, `findByIdAndPersonalTrainerId`, `findByIdAndAlunoId`, `findByAlunoIdAndStatusOrderByDataRealDesc`, `existsByMetricaIdAndStatus`, `findAlunosByMetricaIdAndStatus`, `findAlunosByMetricaId`, `removerMetricaDeSessoesPlanejadas`)
 - `[TermoAceiteRepository.java:TermoAceiteRepository]` (`deleteByUsuario`)
 - `[TurmaRepository.java:TurmaRepository]` (`findByPersonalId`, `findByIdAndPersonalId`)
 - `[UsuarioRepository.java:UsuarioRepository]` (`findByEmail`, `existsByEmail`, `existsByCpf`)
@@ -32,6 +32,7 @@ Spring Data JPA repository interfaces providing persistence queries, multi-tenan
 - `[NotificacaoRepository.java:marcarTodasComoLidas]` executes a `@Modifying` bulk `UPDATE Notificacao n SET n.lida = true` for all unread notifications of a user.
 - `[PersonalConvitesRepository.java:incrementarQuantidadeUsuarios]` executes a `@Modifying` bulk `UPDATE PersonalConvites p SET p.quantidadesUsuarios = p.quantidadesUsuarios + 1` for the invite ID.
 - `[NotificacaoRepository.java:deleteByUsuarioIdAndTipoAndReferenciaId]` and `[TermoAceiteRepository.java:deleteByUsuario]` delete matching rows from the database.
+- `[SessaoTreinoRepository.java:removerMetricaDeSessoesPlanejadas]` executes a native `@Modifying` `DELETE FROM sessao_treino_metrica` scoped to `PLANEJADA` sessions when a metric is deleted or discontinued.
 
 ## Verification
 - Run: `./mvnw test`

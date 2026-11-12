@@ -16,7 +16,7 @@ Gymnasion is a multi-tenant SaaS backend platform built with Java 21, Spring Boo
     - `event`: [./src/main/java/com/gymnasion/tcc/event/README.md](./src/main/java/com/gymnasion/tcc/event/README.md) - Post-commit `@Async` transactional event listeners for invitation, approval, and reminder emails.
     - `exceptions`: [./src/main/java/com/gymnasion/tcc/exceptions/README.md](./src/main/java/com/gymnasion/tcc/exceptions/README.md) - Domain and application exception classes.
     - `scheduler`: [./src/main/java/com/gymnasion/tcc/scheduler/README.md](./src/main/java/com/gymnasion/tcc/scheduler/README.md) - `@Scheduled` cron jobs for pending student reminders.
-  - `src/main/resources/db/migration`: [./src/main/resources/db/migration/README.md](./src/main/resources/db/migration/README.md) - Versioned Flyway PostgreSQL schema migrations (`V1` through `V20`).
+  - `src/main/resources/db/migration`: [./src/main/resources/db/migration/README.md](./src/main/resources/db/migration/README.md) - Versioned Flyway PostgreSQL schema migrations (`V1` through `V22`).
 
 ## Global Invariants
 - **Multi-Tenant Isolation**: Personal Trainers can only read or mutate students (`Aluno`), classes (`Turma`), custom metrics (`Metrica`), training routines (`RotinaTreino`), sessions (`SessaoTreino`), performance records (`Desempenho`), and reports belonging to their own `personalTrainerId`; Students (`Role.ALUNO`) can only access their own profile, routines, sessions, metrics, notifications, and Strava integration.
@@ -27,7 +27,7 @@ Gymnasion is a multi-tenant SaaS backend platform built with Java 21, Spring Boo
 - **RFC 7807 Error Contract**: All REST exceptions return `application/problem+json` (`ProblemDetail`) with type URIs under `https://api.gymnasion.com/errors/*`.
 
 ## Global Side Effects
-- **PostgreSQL Database (`spring.datasource.*`)**: Flyway applies `V1..V20` DDL/DML migrations on startup (`spring.flyway.enabled=true`), `DataInitializer` seeds the default `ADMIN` account if absent, and JPA repositories persist domain state across 23 tables.
+- **PostgreSQL Database (`spring.datasource.*`)**: Flyway applies `V1..V22` DDL/DML migrations on startup (`spring.flyway.enabled=true`), `DataInitializer` seeds the default `ADMIN` account if absent, and JPA repositories persist domain state across relational tables.
 - **SMTP Email Server (`spring.mail.*`)**: `EmailService` and post-commit `@Async` listeners in `com.gymnasion.tcc.event` send transactional invitation, approval/rejection, and pending-student reminder emails via `JavaMailSender`.
 - **Strava API v3 (`https://www.strava.com`)**: `StravaService` exchanges/refreshes OAuth 2.0 tokens, deauthorizes connections, and fetches athlete activities over HTTPS.
 - **In-Memory PDF Rendering**: `RelatorioPdfGenerator` loads embedded Plus Jakarta Sans fonts and generates consolidated binary PDF reports (`Cache-Control: no-store`).

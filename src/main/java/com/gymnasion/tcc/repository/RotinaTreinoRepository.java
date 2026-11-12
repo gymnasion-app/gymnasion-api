@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -46,6 +47,6 @@ public interface RotinaTreinoRepository extends JpaRepository<RotinaTreino, UUID
     @Query("SELECT r FROM RotinaTreino r JOIN r.alunos a WHERE a.id = :alunoId AND r.modalidade.id = :modalidadeId AND r.ativo = true")
     List<RotinaTreino> findByAlunoIdAndModalidadeIdAndAtivoTrue(@Param("alunoId") UUID alunoId, @Param("modalidadeId") Long modalidadeId);
 
-    @Query("SELECT CASE WHEN COUNT(r) > 0 THEN true ELSE false END FROM RotinaTreino r JOIN r.metricas m WHERE m.id = :metricaId")
-    boolean existsByMetricaId(@Param("metricaId") UUID metricaId);
+    @Query("SELECT DISTINCT r.id, m FROM RotinaTreino r JOIN r.sessoes s JOIN s.metricas m WHERE r.id IN :rotinaIds AND m.ativo = true ORDER BY m.titulo ASC")
+    List<Object[]> findMetricasAtivasByRotinaIds(@Param("rotinaIds") Collection<UUID> rotinaIds);
 }
