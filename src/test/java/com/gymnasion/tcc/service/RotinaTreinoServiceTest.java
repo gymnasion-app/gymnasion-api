@@ -1,6 +1,7 @@
 package com.gymnasion.tcc.service;
 
 import com.gymnasion.tcc.domain.*;
+import com.gymnasion.tcc.domain.enums.CampoStrava;
 import com.gymnasion.tcc.domain.enums.Role;
 import com.gymnasion.tcc.domain.enums.StatusConvite;
 import com.gymnasion.tcc.domain.enums.StatusSessaoTreino;
@@ -917,7 +918,7 @@ class RotinaTreinoServiceTest {
         assertThat(response.status()).isEqualTo(StatusSessaoTreino.CONCLUIDA);
         assertThat(response.desempenho().metricas())
                 .extracting(RegistroMetricaResponseDTO::valor)
-                .containsExactlyInAnyOrder("01:15", "32,5", "145", "Senti cansaço no final");
+                .containsExactlyInAnyOrder("01:15", "32.5", "145", "Senti cansaço no final");
     }
 
     @Test
@@ -1723,7 +1724,7 @@ class RotinaTreinoServiceTest {
         assertThat(response.desempenho().metricas()).hasSize(4);
         assertThat(response.desempenho().metricas())
                 .extracting(RegistroMetricaResponseDTO::valor)
-                .containsExactlyInAnyOrder("01:25", "35,5", "140", "Excelente ritmo de prova.");
+                .containsExactlyInAnyOrder("01:25", "35.5", "140", "Excelente ritmo de prova.");
     }
 
     @Test
@@ -3153,5 +3154,113 @@ class RotinaTreinoServiceTest {
                     .containsExactly(metrica2.getId(), metrica1.getId());
         });
         verify(rotinaTreinoRepository).findMetricasAtivasByRotinaIds(List.of(rotinaTreino.getId()));
+    }
+
+    @Test
+    @DisplayName("Aluno pode enviar métrica do PERSONAL via Strava desde que informe stravaAtividadeId; caso contrário rejeita")
+    void US22_alunoSubmeteMetricaPersonalComEOuSemStravaAtividadeId() {
+        Metrica metricaPersonalStrava = Metrica.builder()
+                .id(UUID.randomUUID())
+                .titulo("Calorias")
+                .tipo(TipoMetrica.NUMERICO)
+                .unidade("kcal")
+                .campoStrava(CampoStrava.CALORIAS)
+                .quemPreenche(ResponsavelPreenchimento.PERSONAL)
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .ativo(true)
+                .build();
+        UUID sessaoId = UUID.randomUUID();
+        SessaoTreino sessao = SessaoTreino.builder()
+                .id(sessaoId)
+                .rotinaTreino(rotinaTreino)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 10, 20))
+                .status(StatusSessaoTreino.PLANEJADA)
+                .metricas(new HashSet<>(Set.of(metricaPersonalStrava)))
+                .build();
+
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(sessaoTreinoRepository.findByIdAndAlunoId(sessaoId, aluno.getId())).thenReturn(Optional.of(sessao));
+        when(metricaRepository.findById(metricaPersonalStrava.getId())).thenReturn(Optional.of(metricaPersonalStrava));
+
+        // Sem stravaAtividadeId: aluno não pode preencher métrica exclusiva do personal
+        RegistrarExecucaoSessaoRequestDTO semStrava = new RegistrarExecucaoSessaoRequestDTO(
+                LocalDate.of(2026, 10, 20), 45, 6, null,
+                List.of(new RegistrarResultadoMetricaDTO(metricaPersonalStrava.getId(), "420")), null);
+        assertThatThrownBy(() -> rotinaTreinoService.registrarExecucao(usuarioAluno, sessaoId, semStrava))
+                .isInstanceOf(BusinessException.class);
+
+        // Restaura estado pré-transação para testar execução válida em instância mockada
+        sessao.setStatus(StatusSessaoTreino.PLANEJADA);
+        sessao.setConcluidaAluno(false);
+        sessao.setDesempenho(null);
+
+        // Com stravaAtividadeId: aceita e salva trimmed
+        when(sessaoTreinoRepository.save(any(SessaoTreino.class))).thenAnswer(inv -> inv.getArgument(0));
+        RegistrarExecucaoSessaoRequestDTO comStrava = new RegistrarExecucaoSessaoRequestDTO(
+                LocalDate.of(2026, 10, 20), 45, 6, null,
+                List.of(new RegistrarResultadoMetricaDTO(metricaPersonalStrava.getId(), "420,5")), "  987654  ");
+
+        SessaoTreinoResponseDTO resp = rotinaTreinoService.registrarExecucao(usuarioAluno, sessaoId, comStrava);
+        assertThat(resp.desempenho().stravaAtividadeId()).isEqualTo("987654");
+        assertThat(resp.desempenho().metricas()).singleElement().satisfies(r -> {
+            assertThat(r.valor()).isEqualTo("420.5");
+            assertThat(r.unidade()).isEqualTo("kcal");
+        });
+    }
+
+    @Test
+    @DisplayName("Inclusão de pendentes preserva stravaAtividadeId existente e resultados duplicados são deduplicados")
+    void US13_pendentesPreservamStravaIdEDeduplicacaoFunciona() {
+        Metrica pendentePersonal = Metrica.builder()
+                .id(UUID.randomUUID())
+                .titulo("Cadência")
+                .tipo(TipoMetrica.NUMERICO)
+                .unidade("rpm")
+                .quemPreenche(ResponsavelPreenchimento.PERSONAL)
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .ativo(true)
+                .build();
+        UUID sessaoId = UUID.randomUUID();
+        SessaoTreino sessao = SessaoTreino.builder()
+                .id(sessaoId)
+                .rotinaTreino(rotinaTreino)
+                .semana(1)
+                .dataPlanejada(LocalDate.of(2026, 10, 20))
+                .dataReal(LocalDate.of(2026, 10, 20))
+                .duracao(45)
+                .status(StatusSessaoTreino.CONCLUIDA)
+                .concluidaAluno(true)
+                .metricas(new HashSet<>(Set.of(metrica2, pendentePersonal)))
+                .build();
+        Desempenho desempenhoExistente = Desempenho.builder()
+                .id(UUID.randomUUID())
+                .sessaoTreino(sessao)
+                .aluno(aluno)
+                .stravaAtividadeId("orig-111")
+                .registrosMetricas(new ArrayList<>(List.of(
+                        RegistroMetrica.builder().id(UUID.randomUUID()).metrica(metrica2).valor("30").build())))
+                .build();
+        sessao.setDesempenho(desempenhoExistente);
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(sessaoTreinoRepository.findByIdAndPersonalTrainerId(sessaoId, personalTrainer.getId())).thenReturn(Optional.of(sessao));
+        when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId())).thenReturn(Optional.of(aluno));
+        when(metricaRepository.findById(pendentePersonal.getId())).thenReturn(Optional.of(pendentePersonal));
+        when(sessaoTreinoRepository.save(any(SessaoTreino.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // Envia duplicata de pendentePersonal e stravaAtividadeId null -> deve deduplicar e preservar "orig-111"
+        RegistrarExecucaoSessaoRequestDTO dto = new RegistrarExecucaoSessaoRequestDTO(
+                LocalDate.of(2026, 10, 20), 45, null, aluno.getId(),
+                List.of(
+                        new RegistrarResultadoMetricaDTO(pendentePersonal.getId(), "80"),
+                        new RegistrarResultadoMetricaDTO(pendentePersonal.getId(), "85")
+                ), null);
+
+        SessaoTreinoResponseDTO resp = rotinaTreinoService.registrarExecucao(usuarioPersonal, sessaoId, dto);
+        assertThat(resp.desempenho().stravaAtividadeId()).isEqualTo("orig-111");
+        assertThat(resp.desempenho().metricas()).hasSize(2);
     }
 }

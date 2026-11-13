@@ -17,9 +17,16 @@ public record AtualizarMetricaRequestDTO(
 
         ResponsavelPreenchimento quemPreenche,
 
-        CampoStrava campoStrava
+        CampoStrava campoStrava,
+
+        @Size(max = 20, message = "A unidade deve ter no máximo 20 caracteres.")
+        String unidade
 ) {
     public AtualizarMetricaRequestDTO(String titulo, TipoMetrica tipo, Boolean obrigatoria, ResponsavelPreenchimento quemPreenche) {
-        this(titulo, tipo, obrigatoria, quemPreenche, null);
+        this(titulo, tipo, obrigatoria, quemPreenche, null, null);
+    }
+
+    public AtualizarMetricaRequestDTO(String titulo, TipoMetrica tipo, Boolean obrigatoria, ResponsavelPreenchimento quemPreenche, CampoStrava campoStrava) {
+        this(titulo, tipo, obrigatoria, quemPreenche, campoStrava, null);
     }
 }

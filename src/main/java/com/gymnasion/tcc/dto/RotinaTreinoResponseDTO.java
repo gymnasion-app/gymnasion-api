@@ -27,12 +27,17 @@ public record RotinaTreinoResponseDTO(
             UUID id,
             String titulo,
             TipoMetrica tipo,
+            String unidade,
             Boolean obrigatoria,
             ResponsavelPreenchimento quemPreenche,
             CampoStrava campoStrava
     ) {
         public MetricaResumoDTO(UUID id, String titulo, TipoMetrica tipo, Boolean obrigatoria, ResponsavelPreenchimento quemPreenche) {
-            this(id, titulo, tipo, obrigatoria, quemPreenche, null);
+            this(id, titulo, tipo, null, obrigatoria, quemPreenche, null);
+        }
+
+        public MetricaResumoDTO(UUID id, String titulo, TipoMetrica tipo, Boolean obrigatoria, ResponsavelPreenchimento quemPreenche, CampoStrava campoStrava) {
+            this(id, titulo, tipo, null, obrigatoria, quemPreenche, campoStrava);
         }
     }
 }

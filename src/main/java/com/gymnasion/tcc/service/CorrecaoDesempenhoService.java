@@ -2,6 +2,7 @@ package com.gymnasion.tcc.service;
 
 import com.gymnasion.tcc.domain.*;
 import com.gymnasion.tcc.domain.enums.CampoAuditado;
+import com.gymnasion.tcc.domain.enums.CampoStrava;
 import com.gymnasion.tcc.domain.enums.ResponsavelPreenchimento;
 import com.gymnasion.tcc.domain.enums.TipoOperacaoAuditoria;
 import com.gymnasion.tcc.dto.AuditoriaDesempenhoResponseDTO;
@@ -49,10 +50,24 @@ public class CorrecaoDesempenhoService {
 
         Map<String, String> camposInvalidos = new LinkedHashMap<>();
 
-        // US-23 Cenário 4: Observações são salvas após a validação dos dados
-        String observacoes = dto.observacoes() != null ? dto.observacoes().trim() : null;
-        if (observacoes != null && observacoes.isEmpty()) {
-            camposInvalidos.put("observacoes", "As observações não podem ficar em branco.");
+        // US-23 Cenário 4: Observações ("" limpa observações anteriores; espaços em branco são rejeitados)
+        boolean limparObservacoes = false;
+        String observacoes = null;
+        if (dto.observacoes() != null) {
+            if (dto.observacoes().isEmpty()) {
+                limparObservacoes = true;
+            } else {
+                String obsTrimmed = dto.observacoes().trim();
+                if (obsTrimmed.isEmpty()) {
+                    camposInvalidos.put("observacoes", "As observações não podem ficar em branco.");
+                } else {
+                    observacoes = obsTrimmed;
+                }
+            }
+        }
+
+        if (dto.duracao() != null && (dto.duracao() < 1 || dto.duracao() > 1440)) {
+            camposInvalidos.put("duracao", "A duração deve estar entre 1 e 1440 minutos.");
         }
 
         // US-23 Cenários 2, 6 e 7: Valida todas as métricas antes de aplicar qualquer alteração
@@ -87,13 +102,13 @@ public class CorrecaoDesempenhoService {
                 }
             }
 
-            String valor = resDto.valor().trim();
-            String erroTipo = ValidadorValorMetrica.validar(metrica, valor);
-            if (erroTipo != null) {
-                camposInvalidos.put(metrica.getId().toString(), erroTipo);
+            String valorBruto = resDto.valor() != null ? resDto.valor().trim() : "";
+            ValidadorValorMetrica.ResultadoValidacao validacao = ValidadorValorMetrica.validarENormalizar(metrica, valorBruto);
+            if (!validacao.valido()) {
+                camposInvalidos.put(metrica.getId().toString(), validacao.mensagemErro());
                 continue;
             }
-            alteracoes.add(new AlteracaoMetrica(metrica, registroExistente, valor));
+            alteracoes.add(new AlteracaoMetrica(metrica, registroExistente, validacao.valorNormalizado()));
         }
 
         // US-23 Cenário 6: Impede o salvamento, informa os campos e preserva os dados anteriores
@@ -114,14 +129,28 @@ public class CorrecaoDesempenhoService {
             sessao.setDataReal(dto.dataReal());
         }
 
-        // US-23 Cenário 4: Corrige as observações do desempenho
-        if (observacoes != null && !observacoes.equals(desempenho.getObservacoes())) {
+        // Corrige ou inclui duração da sessão quando alterada
+        if (dto.duracao() != null && !dto.duracao().equals(sessao.getDuracao())) {
+            auditorias.add(auditoria(desempenho, usuario, CampoAuditado.DURACAO, null,
+                    sessao.getDuracao() != null ? sessao.getDuracao().toString() : null,
+                    dto.duracao().toString()));
+            sessao.setDuracao(dto.duracao());
+        }
+
+        // US-23 Cenário 4: Corrige ou limpa as observações do desempenho
+        if (limparObservacoes) {
+            if (desempenho.getObservacoes() != null) {
+                auditorias.add(auditoria(desempenho, usuario, CampoAuditado.OBSERVACOES, null,
+                        desempenho.getObservacoes(), ""));
+                desempenho.setObservacoes(null);
+            }
+        } else if (observacoes != null && !observacoes.equals(desempenho.getObservacoes())) {
             auditorias.add(auditoria(desempenho, usuario, CampoAuditado.OBSERVACOES, null,
                     desempenho.getObservacoes(), observacoes));
             desempenho.setObservacoes(observacoes);
         }
 
-        // US-23 Cenários 2 e 7: Correção de valores existentes e inclusão de métricas pendentes
+        // US-23 Cenários 2 e 7: Correção de valores existentes (comparação canônica) e inclusão de métricas pendentes
         boolean alterouMetricas = false;
         for (AlteracaoMetrica alteracao : alteracoes) {
             RegistroMetrica registro = alteracao.registroExistente();
@@ -133,10 +162,15 @@ public class CorrecaoDesempenhoService {
                         .build());
                 auditorias.add(auditoria(desempenho, usuario, CampoAuditado.METRICA, alteracao.metrica(), null, alteracao.valor()));
                 alterouMetricas = true;
-            } else if (!alteracao.valor().equals(registro.getValor())) {
-                auditorias.add(auditoria(desempenho, usuario, CampoAuditado.METRICA, alteracao.metrica(), registro.getValor(), alteracao.valor()));
-                registro.setValor(alteracao.valor());
-                alterouMetricas = true;
+            } else {
+                ValidadorValorMetrica.ResultadoValidacao existenteNorm =
+                        ValidadorValorMetrica.validarENormalizar(alteracao.metrica(), registro.getValor());
+                String valorExistenteComparavel = existenteNorm.valido() ? existenteNorm.valorNormalizado() : registro.getValor();
+                if (!alteracao.valor().equals(valorExistenteComparavel)) {
+                    auditorias.add(auditoria(desempenho, usuario, CampoAuditado.METRICA, alteracao.metrica(), registro.getValor(), alteracao.valor()));
+                    registro.setValor(alteracao.valor());
+                    alterouMetricas = true;
+                }
             }
         }
 
@@ -267,6 +301,8 @@ public class CorrecaoDesempenhoService {
                             metrica.getId(),
                             metrica.getTitulo(),
                             metrica.getTipo(),
+                            metrica.getUnidade(),
+                            metrica.getCampoStrava() == CampoStrava.NENHUM ? null : metrica.getCampoStrava(),
                             metrica.getObrigatoria(),
                             metrica.getQuemPreenche(),
                             metrica.getAtivo(),
@@ -299,6 +335,7 @@ public class CorrecaoDesempenhoService {
                 desempenho != null ? desempenho.getRegistradoPor() : null,
                 desempenho != null ? desempenho.getDataRegistro() : null,
                 desempenho != null ? desempenho.getObservacoes() : null,
+                desempenho != null ? desempenho.getStravaAtividadeId() : null,
                 metricasDTO
         );
     }

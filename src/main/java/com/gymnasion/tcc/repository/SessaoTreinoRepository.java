@@ -11,8 +11,10 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Repository
@@ -60,6 +62,9 @@ public interface SessaoTreinoRepository extends JpaRepository<SessaoTreino, UUID
 
     @Query("SELECT CASE WHEN COUNT(s) > 0 THEN true ELSE false END FROM SessaoTreino s JOIN s.metricas m WHERE m.id = :metricaId AND s.status = :status")
     boolean existsByMetricaIdAndStatus(@Param("metricaId") UUID metricaId, @Param("status") StatusSessaoTreino status);
+
+    @Query("SELECT DISTINCT m.id FROM SessaoTreino s JOIN s.metricas m WHERE m.id IN :metricaIds AND s.status = :status")
+    Set<UUID> findMetricaIdsByStatus(@Param("metricaIds") Collection<UUID> metricaIds, @Param("status") StatusSessaoTreino status);
 
     @Query("SELECT DISTINCT a FROM SessaoTreino s JOIN s.metricas m JOIN s.rotinaTreino r JOIN r.alunos a WHERE m.id = :metricaId AND s.status = :status")
     List<Aluno> findAlunosByMetricaIdAndStatus(@Param("metricaId") UUID metricaId, @Param("status") StatusSessaoTreino status);

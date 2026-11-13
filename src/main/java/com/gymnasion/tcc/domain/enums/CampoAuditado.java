@@ -6,5 +6,6 @@ package com.gymnasion.tcc.domain.enums;
 public enum CampoAuditado {
     METRICA,
     DATA_REAL,
-    OBSERVACOES
+    OBSERVACOES,
+    DURACAO
 }

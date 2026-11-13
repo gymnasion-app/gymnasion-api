@@ -12,6 +12,7 @@ public record DesempenhoResponseDTO(
         UUID alunoId,
         String nomeAluno,
         String observacoes,
+        String stravaAtividadeId,
         List<RegistroMetricaResponseDTO> metricas
 ) {
     public DesempenhoResponseDTO(
@@ -23,6 +24,19 @@ public record DesempenhoResponseDTO(
             String nomeAluno,
             List<RegistroMetricaResponseDTO> metricas
     ) {
-        this(id, dataRegistro, nivelCansaco, registradoPor, alunoId, nomeAluno, null, metricas);
+        this(id, dataRegistro, nivelCansaco, registradoPor, alunoId, nomeAluno, null, null, metricas);
+    }
+
+    public DesempenhoResponseDTO(
+            UUID id,
+            OffsetDateTime dataRegistro,
+            Integer nivelCansaco,
+            String registradoPor,
+            UUID alunoId,
+            String nomeAluno,
+            String observacoes,
+            List<RegistroMetricaResponseDTO> metricas
+    ) {
+        this(id, dataRegistro, nivelCansaco, registradoPor, alunoId, nomeAluno, observacoes, null, metricas);
     }
 }

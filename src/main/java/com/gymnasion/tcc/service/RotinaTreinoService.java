@@ -895,7 +895,17 @@ public class RotinaTreinoService {
         SessaoTreino sessao;
         Aluno alunoResponsavel;
         String registradoPor;
-        List<RegistrarResultadoMetricaDTO> resultados = dto.resultados() != null ? dto.resultados() : List.of();
+        List<RegistrarResultadoMetricaDTO> resultadosBrutos = dto.resultados() != null ? dto.resultados() : List.of();
+        Map<UUID, RegistrarResultadoMetricaDTO> resultadosPorMetrica = new LinkedHashMap<>();
+        for (RegistrarResultadoMetricaDTO item : resultadosBrutos) {
+            if (item != null && item.metricaId() != null) {
+                resultadosPorMetrica.put(item.metricaId(), item);
+            }
+        }
+        List<RegistrarResultadoMetricaDTO> resultados = new ArrayList<>(resultadosPorMetrica.values());
+        String stravaAtividadeIdNormalizado = dto.stravaAtividadeId() != null && !dto.stravaAtividadeId().isBlank()
+                ? dto.stravaAtividadeId().trim()
+                : null;
 
         if (usuario.getRole() == Role.PERSONAL_TRAINER) {
             PersonalTrainer personal = obterPersonalLogado(usuario);
@@ -984,6 +994,7 @@ public class RotinaTreinoService {
                     .registradoPor(registradoPor)
                     .dataRegistro(OffsetDateTime.now())
                     .nivelCansaco(dto.nivelCansaco())
+                    .stravaAtividadeId(stravaAtividadeIdNormalizado)
                     .build();
             sessao.setDesempenho(desempenho);
         } else {
@@ -992,6 +1003,7 @@ public class RotinaTreinoService {
             if (dto.nivelCansaco() != null) {
                 desempenho.setNivelCansaco(dto.nivelCansaco());
             }
+            desempenho.setStravaAtividadeId(stravaAtividadeIdNormalizado);
         }
 
         Set<Metrica> metricasDaSessao = sessao.getMetricas() != null ? sessao.getMetricas() : Set.of();
@@ -1011,19 +1023,21 @@ public class RotinaTreinoService {
                 throw new BusinessException("A métrica '" + metrica.getTitulo() + "' é de preenchimento exclusivo do aluno.");
             }
             if (!isPersonal && quemPreenche == ResponsavelPreenchimento.PERSONAL) {
-                // Permite gravação se a métrica estiver vinculada a campo do Strava (integração autorizada)
-                if (metrica.getCampoStrava() == null || metrica.getCampoStrava() == CampoStrava.NENHUM) {
+                // Permite gravação pelo aluno exclusivamente quando vinculada ao Strava e acompanhada de atividade Strava
+                boolean vinculadoStrava = metrica.getCampoStrava() != null && metrica.getCampoStrava() != CampoStrava.NENHUM;
+                if (!vinculadoStrava || stravaAtividadeIdNormalizado == null) {
                     throw new BusinessException("A métrica '" + metrica.getTitulo() + "' é de preenchimento exclusivo do personal trainer.");
                 }
             }
 
-            // US-22 Cenário 9 / US-18 (RN-015): Valida o valor de acordo com o tipo da métrica
-            String valor = resDto.valor().trim();
-            String erroTipo = ValidadorValorMetrica.validar(metrica, valor);
-            if (erroTipo != null) {
-                camposInvalidos.put(metrica.getId().toString(), erroTipo);
+            // US-22 Cenário 9 / US-18 (RN-015): Valida e normaliza o valor de acordo com o tipo/unidade da métrica
+            String valorBruto = resDto.valor() != null ? resDto.valor().trim() : "";
+            ValidadorValorMetrica.ResultadoValidacao validacao = ValidadorValorMetrica.validarENormalizar(metrica, valorBruto);
+            if (!validacao.valido()) {
+                camposInvalidos.put(metrica.getId().toString(), validacao.mensagemErro());
                 continue;
             }
+            String valor = validacao.valorNormalizado();
 
             if (somenteInclusaoPendentes) {
                 boolean jaPreenchida = desempenho.getRegistrosMetricas().stream()
@@ -1197,6 +1211,7 @@ public class RotinaTreinoService {
                                 rm.getMetrica().getId(),
                                 rm.getMetrica().getTitulo(),
                                 rm.getMetrica().getTipo(),
+                                rm.getMetrica().getUnidade(),
                                 rm.getValor()
                         ))
                         .toList() : List.of();
@@ -1209,6 +1224,7 @@ public class RotinaTreinoService {
                         d.getAluno() != null ? d.getAluno().getId() : null,
                         d.getAluno() != null && d.getAluno().getUsuario() != null ? d.getAluno().getUsuario().getNome() : null,
                         d.getObservacoes(),
+                        d.getStravaAtividadeId(),
                         metricasDTO
                 );
             }
@@ -1290,13 +1306,15 @@ public class RotinaTreinoService {
     }
 
     private RotinaTreinoResponseDTO.MetricaResumoDTO toMetricaResumoDTO(Metrica metrica) {
+        CampoStrava campoStrava = metrica.getCampoStrava() == CampoStrava.NENHUM ? null : metrica.getCampoStrava();
         return new RotinaTreinoResponseDTO.MetricaResumoDTO(
                 metrica.getId(),
                 metrica.getTitulo(),
                 metrica.getTipo(),
+                metrica.getUnidade(),
                 metrica.getObrigatoria(),
                 metrica.getQuemPreenche(),
-                metrica.getCampoStrava()
+                campoStrava
         );
     }
 

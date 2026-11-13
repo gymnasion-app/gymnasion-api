@@ -389,4 +389,45 @@ class DashboardEvolucaoServiceTest {
         )).isInstanceOf(NotFoundException.class)
                 .hasMessage("Aluno não encontrado para este Personal Trainer.");
     }
+
+    @Test
+    @DisplayName("US15: Dashboard suporta hh:mm:ss, ritmo >60min, pontos corrompidos null-safe, unidade e polaridade NEUTRO/MELHORIA")
+    void US15_hhmmss_ritmoEstendido_nullSafeEPolaridade() {
+        Metrica ritmo = Metrica.builder().id(UUID.randomUUID()).titulo("Pace").tipo(TipoMetrica.TEMPO)
+                .unidade("min/km").campoStrava(CampoStrava.RITMO_MEDIO)
+                .quemPreenche(ResponsavelPreenchimento.ALUNO).modalidade(modalidade).personalTrainer(personalTrainer).ativo(true).build();
+        Metrica tempoMovimento = Metrica.builder().id(UUID.randomUUID()).titulo("Tempo Movimento").tipo(TipoMetrica.TEMPO)
+                .unidade("hh:mm:ss").campoStrava(CampoStrava.TEMPO_MOVIMENTO)
+                .quemPreenche(ResponsavelPreenchimento.ALUNO).modalidade(modalidade).personalTrainer(personalTrainer).ativo(true).build();
+
+        // Inclui ponto com rm.getId() == null e valor inválido para validar tolerância a dados legados sem NPE
+        Desempenho d1 = criarDesempenho(LocalDate.of(2026, 9, 1), 5, List.of(
+                RegistroMetrica.builder().metrica(ritmo).valor("05:30").build(),
+                RegistroMetrica.builder().metrica(tempoMovimento).valor("01:05:00").build()));
+        Desempenho d2 = criarDesempenho(LocalDate.of(2026, 9, 8), 5, List.of(
+                RegistroMetrica.builder().metrica(ritmo).valor("corrompido").build(),
+                RegistroMetrica.builder().metrica(tempoMovimento).valor("01:00:00").build()));
+        Desempenho d3 = criarDesempenho(LocalDate.of(2026, 9, 15), 5, List.of(
+                RegistroMetrica.builder().metrica(ritmo).valor("05:00").build(),
+                RegistroMetrica.builder().metrica(tempoMovimento).valor("00:55:00").build()));
+
+        when(personalTrainerRepository.getByUsuario(usuarioPersonal)).thenReturn(Optional.of(personalTrainer));
+        when(alunoRepository.findByIdAndPersonalId(aluno.getId(), personalTrainer.getId())).thenReturn(Optional.of(aluno));
+        when(desempenhoRepository.findByAlunoIdWithMetricas(aluno.getId())).thenReturn(List.of(d1, d2, d3));
+
+        DashboardEvolucaoResponseDTO resp = dashboardEvolucaoService.obterDashboardPeloPersonal(
+                usuarioPersonal, aluno.getId(), modalidade.getId(), null, null);
+
+        SerieMetricaDashboardDTO seriePace = resp.metricas().stream()
+                .filter(m -> m.titulo().equals("Pace")).findFirst().orElseThrow();
+        assertThat(seriePace.unidade()).isEqualTo("min/km");
+        assertThat(seriePace.pontos()).hasSize(3);
+        assertThat(seriePace.pontos().get(1).valorNumerico()).isNull();
+        assertThat(seriePace.tendencia().indicadorVisual()).isEqualTo("MELHORIA");
+
+        SerieMetricaDashboardDTO serieMov = resp.metricas().stream()
+                .filter(m -> m.titulo().equals("Tempo Movimento")).findFirst().orElseThrow();
+        assertThat(serieMov.unidade()).isEqualTo("hh:mm:ss");
+        assertThat(serieMov.tendencia().indicadorVisual()).isEqualTo("NEUTRO");
+    }
 }

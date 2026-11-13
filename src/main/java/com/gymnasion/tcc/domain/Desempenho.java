@@ -38,6 +38,9 @@ public class Desempenho {
     @Column(columnDefinition = "TEXT")
     private String observacoes; // US-23 C4: observações do desempenho, corrigíveis pelo personal
 
+    @Column(name = "strava_atividade_id", length = 64)
+    private String stravaAtividadeId;
+
     @OneToMany(mappedBy = "desempenho", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
     private java.util.List<RegistroMetrica> registrosMetricas = new java.util.ArrayList<>();

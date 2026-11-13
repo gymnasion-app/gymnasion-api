@@ -483,4 +483,51 @@ class CorrecaoDesempenhoServiceTest {
                 .extracting(AuditoriaDesempenho::getCampo)
                 .containsExactlyInAnyOrder(CampoAuditado.DATA_REAL, CampoAuditado.OBSERVACOES);
     }
+
+    @Test
+    @DisplayName("US23: Corrige duração auditando INCLUSAO/CORRECAO, limpa observações com string vazia e rejeita apenas espaços")
+    void US23_duracaoObservacoesENormalizacaoCanonica() {
+        personalResponsavelAcessaSessao();
+        salvamentoRetornaSessao();
+        desempenho.setObservacoes("Observação inicial");
+        sessao.setDuracao(null);
+
+        // Inclusão de duração e limpeza de observações com ""
+        CorrigirDesempenhoRequestDTO incluirLimpar = new CorrigirDesempenhoRequestDTO(
+                null, "", List.of(), 75);
+        DesempenhoDetalheResponseDTO resp1 = correcaoDesempenhoService.corrigirRegistro(usuarioPersonal, sessaoId, incluirLimpar);
+        assertThat(resp1.duracao()).isEqualTo(75);
+        assertThat(resp1.observacoes()).isNull();
+
+        verify(auditoriaDesempenhoRepository).saveAll(auditoriasCaptor.capture());
+        assertThat(auditoriasCaptor.getValue()).extracting(AuditoriaDesempenho::getCampo, AuditoriaDesempenho::getTipoOperacao, AuditoriaDesempenho::getValorNovo)
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple(CampoAuditado.DURACAO, TipoOperacaoAuditoria.INCLUSAO, "75"),
+                        org.assertj.core.groups.Tuple.tuple(CampoAuditado.OBSERVACOES, TipoOperacaoAuditoria.CORRECAO, "")
+                );
+
+        // Correção de duração
+        reset(auditoriaDesempenhoRepository);
+        correcaoDesempenhoService.corrigirRegistro(usuarioPersonal, sessaoId,
+                new CorrigirDesempenhoRequestDTO(null, null, List.of(), 80));
+        verify(auditoriaDesempenhoRepository).saveAll(auditoriasCaptor.capture());
+        assertThat(auditoriasCaptor.getValue()).singleElement().satisfies(a -> {
+            assertThat(a.getCampo()).isEqualTo(CampoAuditado.DURACAO);
+            assertThat(a.getTipoOperacao()).isEqualTo(TipoOperacaoAuditoria.CORRECAO);
+            assertThat(a.getValorAnterior()).isEqualTo("75");
+            assertThat(a.getValorNovo()).isEqualTo("80");
+        });
+
+        // Observações apenas espaços rejeitada em camposInvalidos
+        assertThatThrownBy(() -> correcaoDesempenhoService.corrigirRegistro(usuarioPersonal, sessaoId,
+                new CorrigirDesempenhoRequestDTO(null, "   ", List.of(), null)))
+                .isInstanceOf(MetricasInvalidasException.class)
+                .satisfies(ex -> assertThat(((MetricasInvalidasException) ex).getCamposInvalidos()).containsKey("observacoes"));
+
+        // Comparação canônica: "00:29" vs "0:29" não gera alteração
+        assertThatThrownBy(() -> correcaoDesempenhoService.corrigirRegistro(usuarioPersonal, sessaoId,
+                new CorrigirDesempenhoRequestDTO(null, null, List.of(new RegistrarResultadoMetricaDTO(tempo.getId(), "0:29")), null)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Nenhuma alteração informada.");
+    }
 }

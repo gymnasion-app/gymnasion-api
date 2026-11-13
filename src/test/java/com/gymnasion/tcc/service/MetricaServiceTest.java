@@ -656,4 +656,95 @@ class MetricaServiceTest {
         verify(sessaoTreinoRepository, never()).findAlunosByMetricaId(any());
         verify(acompanhamentoTreinoService, never()).sincronizarNotificacaoParaAluno(any());
     }
+
+    @Test
+    @DisplayName("Criar métrica aplica defaults de unidade, valida TEXTO/ritmo e normaliza strings vazias")
+    void criarMetrica_unidadePadraoEValidacao() {
+        when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
+        when(modalidadeRepository.findById(1L)).thenReturn(Optional.of(modalidade));
+        when(metricaRepository.save(any(Metrica.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // FREQUENCIA_CARDIACA sem unidade assume "bpm"
+        MetricaResponseDTO fc = metricaService.criarMetrica(usuarioLogado, new CriarMetricaRequestDTO(
+                1L, "FC Média", TipoMetrica.FREQUENCIA_CARDIACA, false, ResponsavelPreenchimento.ALUNO, CampoStrava.FREQUENCIA_CARDIACA_MEDIA, null));
+        assertThat(fc.unidade()).isEqualTo("bpm");
+
+        // TEXTO com unidade não vazia é rejeitado
+        assertThatThrownBy(() -> metricaService.criarMetrica(usuarioLogado, new CriarMetricaRequestDTO(
+                1L, "Obs", TipoMetrica.TEXTO, false, ResponsavelPreenchimento.ALUNO, null, "kg")))
+                .isInstanceOf(BusinessException.class);
+
+        // NUMERICO com "" normaliza unidade para null
+        MetricaResponseDTO num = metricaService.criarMetrica(usuarioLogado, new CriarMetricaRequestDTO(
+                1L, "Repetições", TipoMetrica.NUMERICO, false, ResponsavelPreenchimento.ALUNO, null, "  "));
+        assertThat(num.unidade()).isNull();
+
+        // TEMPO + RITMO_MEDIO rejeita "mm:ss" e aceita "min/100m"
+        assertThatThrownBy(() -> metricaService.criarMetrica(usuarioLogado, new CriarMetricaRequestDTO(
+                1L, "Pace", TipoMetrica.TEMPO, false, ResponsavelPreenchimento.ALUNO, CampoStrava.RITMO_MEDIO, "mm:ss")))
+                .isInstanceOf(BusinessException.class);
+        MetricaResponseDTO pace = metricaService.criarMetrica(usuarioLogado, new CriarMetricaRequestDTO(
+                1L, "Pace", TipoMetrica.TEMPO, false, ResponsavelPreenchimento.ALUNO, CampoStrava.RITMO_MEDIO, "min/100m"));
+        assertThat(pace.unidade()).isEqualTo("min/100m");
+    }
+
+    @Test
+    @DisplayName("Métrica com histórico bloqueia alteração de unidade e permite desvincular Strava via NENHUM")
+    void atualizarMetrica_comHistorico_bloqueiaUnidadeEDesvinculaStrava() {
+        UUID metricaId = UUID.randomUUID();
+        Metrica m = Metrica.builder()
+                .id(metricaId)
+                .titulo("Distância")
+                .tipo(TipoMetrica.NUMERICO)
+                .unidade("km")
+                .campoStrava(CampoStrava.DISTANCIA_KM)
+                .obrigatoria(false)
+                .quemPreenche(ResponsavelPreenchimento.AMBOS)
+                .modalidade(modalidade)
+                .personalTrainer(personalTrainer)
+                .ativo(true)
+                .build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
+        when(metricaRepository.findByIdAndPersonalTrainerId(metricaId, personalTrainer.getId())).thenReturn(Optional.of(m));
+        when(registroMetricaRepository.existsByMetricaId(metricaId)).thenReturn(true);
+        when(metricaRepository.save(any(Metrica.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        assertThatThrownBy(() -> metricaService.atualizarMetrica(metricaId, usuarioLogado, new AtualizarMetricaRequestDTO(
+                "Distância", TipoMetrica.NUMERICO, false, ResponsavelPreenchimento.AMBOS, CampoStrava.DISTANCIA_KM, "m")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Métrica com histórico não permite alterar tipo ou unidade.");
+
+        MetricaResponseDTO atualizada = metricaService.atualizarMetrica(metricaId, usuarioLogado, new AtualizarMetricaRequestDTO(
+                "Distância", TipoMetrica.NUMERICO, false, ResponsavelPreenchimento.AMBOS, CampoStrava.NENHUM, "km"));
+        assertThat(atualizada.campoStrava()).isNull();
+        assertThat(atualizada.possuiHistorico()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Listar métricas preenche possuiHistorico em lote via registros e sessões concluídas")
+    void listarMetricasPorModalidade_preenchePossuiHistoricoEmLote() {
+        Metrica m1 = Metrica.builder().id(UUID.randomUUID()).titulo("M1").tipo(TipoMetrica.NUMERICO)
+                .obrigatoria(false).quemPreenche(ResponsavelPreenchimento.ALUNO).modalidade(modalidade).personalTrainer(personalTrainer).ativo(true).build();
+        Metrica m2 = Metrica.builder().id(UUID.randomUUID()).titulo("M2").tipo(TipoMetrica.TEMPO).unidade("mm:ss")
+                .obrigatoria(false).quemPreenche(ResponsavelPreenchimento.ALUNO).modalidade(modalidade).personalTrainer(personalTrainer).ativo(true).build();
+        Metrica m3 = Metrica.builder().id(UUID.randomUUID()).titulo("M3").tipo(TipoMetrica.TEXTO)
+                .obrigatoria(false).quemPreenche(ResponsavelPreenchimento.ALUNO).modalidade(modalidade).personalTrainer(personalTrainer).ativo(true).build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
+        when(metricaRepository.findByPersonalTrainerIdAndModalidadeId(personalTrainer.getId(), 1L))
+                .thenReturn(List.of(m1, m2, m3));
+        when(registroMetricaRepository.findMetricaIdsWithRegistros(any()))
+                .thenReturn(java.util.Set.of(m1.getId()));
+        when(sessaoTreinoRepository.findMetricaIdsByStatus(any(), eq(StatusSessaoTreino.CONCLUIDA)))
+                .thenReturn(java.util.Set.of(m2.getId()));
+
+        List<MetricaResponseDTO> lista = metricaService.listarMetricasPorModalidade(usuarioLogado, 1L);
+        assertThat(lista).extracting(MetricaResponseDTO::titulo, MetricaResponseDTO::possuiHistorico)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("M1", true),
+                        org.assertj.core.groups.Tuple.tuple("M2", true),
+                        org.assertj.core.groups.Tuple.tuple("M3", false)
+                );
+    }
 }

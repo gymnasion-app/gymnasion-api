@@ -1,6 +1,7 @@
 package com.gymnasion.tcc.service;
 
 import com.gymnasion.tcc.domain.*;
+import com.gymnasion.tcc.domain.enums.CampoStrava;
 import com.gymnasion.tcc.domain.enums.ResponsavelPreenchimento;
 import com.gymnasion.tcc.domain.enums.StatusSessaoTreino;
 import com.gymnasion.tcc.dto.*;
@@ -329,9 +330,10 @@ public class AcompanhamentoTreinoService {
                         m.getId(),
                         m.getTitulo(),
                         m.getTipo(),
+                        m.getUnidade(),
                         m.getObrigatoria(),
                         m.getQuemPreenche(),
-                        m.getCampoStrava()
+                        m.getCampoStrava() == CampoStrava.NENHUM ? null : m.getCampoStrava()
                 ))
                 .toList();
     }
@@ -377,6 +379,8 @@ public class AcompanhamentoTreinoService {
                         m.getId(),
                         m.getTitulo(),
                         m.getTipo(),
+                        m.getUnidade(),
+                        m.getCampoStrava() == CampoStrava.NENHUM ? null : m.getCampoStrava(),
                         m.getQuemPreenche(),
                         m.getObrigatoria()
                 ));
@@ -397,6 +401,7 @@ public class AcompanhamentoTreinoService {
                         rm.getMetrica().getId(),
                         rm.getMetrica().getTitulo(),
                         rm.getMetrica().getTipo(),
+                        rm.getMetrica().getUnidade(),
                         rm.getValor()
                 ))
                 .toList() : List.of();
@@ -409,6 +414,7 @@ public class AcompanhamentoTreinoService {
                 d.getAluno() != null ? d.getAluno().getId() : null,
                 d.getAluno() != null && d.getAluno().getUsuario() != null ? d.getAluno().getUsuario().getNome() : null,
                 d.getObservacoes(),
+                d.getStravaAtividadeId(),
                 metricasDTO
         );
     }

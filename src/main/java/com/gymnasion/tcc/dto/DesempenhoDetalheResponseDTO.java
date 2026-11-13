@@ -1,5 +1,6 @@
 package com.gymnasion.tcc.dto;
 
+import com.gymnasion.tcc.domain.enums.CampoStrava;
 import com.gymnasion.tcc.domain.enums.ResponsavelPreenchimento;
 import com.gymnasion.tcc.domain.enums.StatusSessaoTreino;
 import com.gymnasion.tcc.domain.enums.TipoMetrica;
@@ -29,13 +30,43 @@ public record DesempenhoDetalheResponseDTO(
         String registradoPor,
         OffsetDateTime dataRegistro,
         String observacoes,
+        String stravaAtividadeId,
         @Schema(description = "Métricas do registro, com o valor atual e as ações permitidas ao personal")
         List<MetricaDesempenhoDTO> metricas
 ) {
+    public DesempenhoDetalheResponseDTO(
+            UUID sessaoId,
+            UUID rotinaTreinoId,
+            String rotinaTitulo,
+            String modalidadeNome,
+            UUID desempenhoId,
+            UUID alunoId,
+            String nomeAluno,
+            Integer semana,
+            LocalDate dataPlanejada,
+            LocalDate dataReal,
+            Integer duracao,
+            String atividades,
+            StatusSessaoTreino status,
+            Boolean concluidaAluno,
+            Boolean validadaPersonal,
+            Integer nivelCansaco,
+            String registradoPor,
+            OffsetDateTime dataRegistro,
+            String observacoes,
+            List<MetricaDesempenhoDTO> metricas
+    ) {
+        this(sessaoId, rotinaTreinoId, rotinaTitulo, modalidadeNome, desempenhoId, alunoId, nomeAluno, semana,
+                dataPlanejada, dataReal, duracao, atividades, status, concluidaAluno, validadaPersonal,
+                nivelCansaco, registradoPor, dataRegistro, observacoes, null, metricas);
+    }
+
     public record MetricaDesempenhoDTO(
             UUID metricaId,
             String titulo,
             TipoMetrica tipo,
+            String unidade,
+            CampoStrava campoStrava,
             Boolean obrigatoria,
             ResponsavelPreenchimento quemPreenche,
             @Schema(description = "false quando a métrica foi descontinuada (RN-017)")
@@ -46,5 +77,19 @@ public record DesempenhoDetalheResponseDTO(
             Boolean correcaoPermitida,
             @Schema(description = "A métrica está pendente e pode ser preenchida pelo personal (US-23 C7)")
             Boolean inclusaoPermitida
-    ) {}
+    ) {
+        public MetricaDesempenhoDTO(
+                UUID metricaId,
+                String titulo,
+                TipoMetrica tipo,
+                Boolean obrigatoria,
+                ResponsavelPreenchimento quemPreenche,
+                Boolean ativa,
+                String valor,
+                Boolean correcaoPermitida,
+                Boolean inclusaoPermitida
+        ) {
+            this(metricaId, titulo, tipo, null, null, obrigatoria, quemPreenche, ativa, valor, correcaoPermitida, inclusaoPermitida);
+        }
+    }
 }

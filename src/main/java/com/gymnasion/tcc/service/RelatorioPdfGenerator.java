@@ -208,7 +208,7 @@ public class RelatorioPdfGenerator {
         indicadores.addCell(criarIndicador("Taxa de adesão",
                 resumo.taxaAdesaoPercentual() != null ? formatarNumero(resumo.taxaAdesaoPercentual()) + "%" : "—"));
         indicadores.addCell(criarIndicador("Duração média",
-                resumo.duracaoMediaMinutos() != null ? formatarNumero(resumo.duracaoMediaMinutos()) + " min" : "—"));
+                resumo.duracaoMediaMinutos() != null ? FormatadorTempo.formatarDuracaoMinutos(resumo.duracaoMediaMinutos()) : "—"));
         documento.add(indicadores);
     }
 
@@ -265,9 +265,9 @@ public class RelatorioPdfGenerator {
                 : null;
 
         PdfPCell card = criarCelulaCard();
-        card.addElement(criarCabecalhoCard(metrica.titulo(), rotuloTipo(metrica.tipo()), variacao,
+        card.addElement(criarCabecalhoCard(metrica.titulo(), rotuloCard(metrica), variacao,
                 metrica.tendencia() != null ? metrica.tendencia().indicadorVisual() : null, metrica.descontinuada()));
-        adicionarConteudoGrafico(writer, card, datas, valores, metrica.tipo(), unidadeMedia(metrica.tipo()), cor, larguraGrafico);
+        adicionarConteudoGrafico(writer, card, datas, valores, metrica.tipo(), unidadeMedia(metrica), cor, larguraGrafico);
         return card;
     }
 
@@ -439,7 +439,7 @@ public class RelatorioPdfGenerator {
         for (SessaoRelatorioDTO sessao : sessoes) {
             adicionarCelula(tabela, formatarData(sessao.dataPlanejada()), INK_700);
             adicionarCelula(tabela, formatarData(sessao.dataReal()), INK_700);
-            adicionarCelula(tabela, sessao.duracao() != null ? sessao.duracao() + " min" : "—", INK_700);
+            adicionarCelula(tabela, sessao.duracao() != null ? FormatadorTempo.formatarDuracaoMinutos(sessao.duracao()) : "—", INK_700);
             boolean concluida = "Concluída".equals(sessao.status());
             adicionarCelulaSelo(tabela, sessao.status(), concluida ? SUCCESS_50 : BACKGROUND, concluida ? SUCCESS_700 : INK_700);
             if (incluirRpe) {
@@ -473,9 +473,7 @@ public class RelatorioPdfGenerator {
             for (int i = 0; i < grupo.size(); i++) {
                 SerieMetricaDashboardDTO metrica = grupo.get(i);
                 larguras[i + 1] = metrica.tipo() == TipoMetrica.TEXTO ? 2.2f : 1.2f;
-                colunas[i + 1] = metrica.descontinuada()
-                        ? metrica.titulo() + " (" + metrica.statusMetrica() + ")"
-                        : metrica.titulo();
+                colunas[i + 1] = formatarTituloComUnidade(metrica);
                 Map<UUID, String> valores = new HashMap<>();
                 for (PontoMetricaDashboardDTO ponto : metrica.pontos()) {
                     valores.put(ponto.sessaoId(), formatarPonto(ponto, metrica.tipo()));
@@ -673,8 +671,37 @@ public class RelatorioPdfGenerator {
         };
     }
 
-    private String unidadeMedia(TipoMetrica tipo) {
-        return switch (tipo) {
+    private String rotuloCard(SerieMetricaDashboardDTO metrica) {
+        String base = rotuloTipo(metrica.tipo());
+        if (metrica.unidade() != null && !metrica.unidade().isBlank()) {
+            return base + " · " + metrica.unidade();
+        }
+        return base;
+    }
+
+    private String formatarTituloComUnidade(SerieMetricaDashboardDTO metrica) {
+        String titulo = metrica.titulo();
+        String unidade = metrica.unidade();
+        if (unidade != null && !unidade.isBlank()) {
+            String trimmedUnit = unidade.trim();
+            String sufixo = "(" + trimmedUnit + ")";
+            String lowerTitulo = titulo.toLowerCase(LOCALE_PT_BR).trim();
+            boolean jaContem = lowerTitulo.endsWith(sufixo.toLowerCase(LOCALE_PT_BR))
+                    || ("w".equalsIgnoreCase(trimmedUnit) && lowerTitulo.endsWith("(watts)"));
+            if (!jaContem) {
+                titulo = titulo + " " + sufixo;
+            }
+        }
+        return metrica.descontinuada()
+                ? titulo + " (" + metrica.statusMetrica() + ")"
+                : titulo;
+    }
+
+    private String unidadeMedia(SerieMetricaDashboardDTO metrica) {
+        if (metrica.unidade() != null && !metrica.unidade().isBlank()) {
+            return metrica.unidade().trim() + " · média";
+        }
+        return switch (metrica.tipo()) {
             case TEMPO -> "mm:ss · média";
             case FREQUENCIA_CARDIACA -> "bpm · média";
             default -> "média";
@@ -688,11 +715,10 @@ public class RelatorioPdfGenerator {
         return valorOuTraco(ponto.valor() != null ? ponto.valor().trim() : null);
     }
 
-    // Mesma formatação do formatMetric do front-end: tempo em m:ss e números em pt-BR com até 1 casa decimal
+    // Mesma formatação do FormatadorTempo / front-end: tempo em mm:ss ou hh:mm:ss e números em pt-BR com até 1 casa decimal
     private String formatarValor(double valor, TipoMetrica tipo) {
         if (tipo == TipoMetrica.TEMPO) {
-            long total = Math.round(valor);
-            return (total / 60) + ":" + String.format("%02d", total % 60);
+            return FormatadorTempo.formatarTempoSegundos((int) Math.round(valor));
         }
         NumberFormat formato = NumberFormat.getNumberInstance(LOCALE_PT_BR);
         formato.setMaximumFractionDigits(1);

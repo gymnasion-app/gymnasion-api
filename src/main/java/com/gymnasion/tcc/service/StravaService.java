@@ -12,6 +12,7 @@ import com.gymnasion.tcc.dto.StravaStatusResponseDTO;
 import com.gymnasion.tcc.exceptions.BusinessException;
 import com.gymnasion.tcc.exceptions.DuplicateResourceException;
 import com.gymnasion.tcc.exceptions.NotFoundException;
+import com.gymnasion.tcc.exceptions.StravaRateLimitException;
 import com.gymnasion.tcc.infra.config.StravaProperties;
 import com.gymnasion.tcc.repository.AlunoRepository;
 import com.gymnasion.tcc.repository.IntegracaoStravaRepository;
@@ -20,12 +21,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.web.util.UriUtils;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -45,8 +49,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Integração com o Strava API v3 (US-14).
  *
- * Os métodos que falam com o Strava usam noRollbackFor = BusinessException: a renovação de token
- * e a notificação de reconexão (C3) precisam ser gravadas mesmo quando a operação termina em erro.
+ * A leitura/atualização de banco ocorre em TransactionTemplate curto fora do I/O HTTP para evitar
+ * retenção de conexões JDBC, respeitando spring.jpa.open-in-view=false.
  */
 @Service
 @Slf4j
@@ -56,19 +60,23 @@ public class StravaService {
     private static final String STRAVA_OAUTH_TOKEN_URL = "https://www.strava.com/oauth/token";
     private static final String STRAVA_OAUTH_DEAUTHORIZE_URL = "https://www.strava.com/oauth/deauthorize";
     private static final String STRAVA_API_ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities";
+    private static final String STRAVA_API_ACTIVITY_DETAIL_URL = "https://www.strava.com/api/v3/activities";
     private static final String SCOPES_SOLICITADOS = "read,activity:read_all";
     private static final Set<String> SCOPES_ATIVIDADES = Set.of("activity:read", "activity:read_all");
+    private static final Set<String> ESPORTES_CORRIDA_CAMINHADA = Set.of("run", "trailrun", "virtualrun", "walk", "hike");
     private static final Duration VALIDADE_STATE = Duration.ofMinutes(10);
     private static final Duration ANTECEDENCIA_RENOVACAO = Duration.ofMinutes(5);
     private static final int LIMITE_PADRAO = 10;
     private static final int LIMITE_MAXIMO = 30;
     private static final Locale PT_BR = Locale.forLanguageTag("pt-BR");
+    private static final ZoneId ZONA_SAO_PAULO = ZoneId.of("America/Sao_Paulo");
     private static final Base64.Encoder BASE64_URL = Base64.getUrlEncoder().withoutPadding();
 
     private static final String MSG_ERRO_CONEXAO = "Erro ao conectar conta Strava. Entre em contato com o administrador.";
     private static final String MSG_SEM_PERMISSAO_ATIVIDADES = "O acesso às atividades do Strava não foi autorizado. Reconecte sua conta e permita o acesso às atividades.";
     private static final String MSG_TOKEN_EXPIRADO = "O token de acesso do Strava expirou. Por favor, reconecte sua conta.";
     private static final String MSG_FALHA_COMUNICACAO = "Falha ao carregar atividades do Strava. Tente novamente mais tarde.";
+    private static final String MSG_RATE_LIMIT = "Limite temporário de requisições do Strava atingido. Preencha os dados manualmente se necessário.";
 
     private final IntegracaoStravaRepository integracaoStravaRepository;
     private final AlunoRepository alunoRepository;
@@ -77,6 +85,9 @@ public class StravaService {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final TransactionTemplate txTemplate;
+    private final TransactionTemplate readOnlyTxTemplate;
+    private final TransactionTemplate requiresNewTxTemplate;
     private final ConcurrentHashMap<UUID, Object> refreshLocks = new ConcurrentHashMap<>();
 
     @Autowired
@@ -85,9 +96,10 @@ public class StravaService {
             AlunoRepository alunoRepository,
             NotificacaoService notificacaoService,
             StravaProperties stravaProperties,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            PlatformTransactionManager transactionManager) {
         this(integracaoStravaRepository, alunoRepository, notificacaoService, stravaProperties, objectMapper,
-                RestClient.builder().requestFactory(criarRequestFactory()), Clock.systemDefaultZone());
+                RestClient.builder().requestFactory(criarRequestFactory()), Clock.system(ZONA_SAO_PAULO), transactionManager);
     }
 
     StravaService(
@@ -98,6 +110,19 @@ public class StravaService {
             ObjectMapper objectMapper,
             RestClient.Builder restClientBuilder,
             Clock clock) {
+        this(integracaoStravaRepository, alunoRepository, notificacaoService, stravaProperties,
+                objectMapper, restClientBuilder, clock, null);
+    }
+
+    StravaService(
+            IntegracaoStravaRepository integracaoStravaRepository,
+            AlunoRepository alunoRepository,
+            NotificacaoService notificacaoService,
+            StravaProperties stravaProperties,
+            ObjectMapper objectMapper,
+            RestClient.Builder restClientBuilder,
+            Clock clock,
+            PlatformTransactionManager transactionManager) {
         this.integracaoStravaRepository = integracaoStravaRepository;
         this.alunoRepository = alunoRepository;
         this.notificacaoService = notificacaoService;
@@ -105,6 +130,18 @@ public class StravaService {
         this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
         this.restClient = restClientBuilder.build();
         this.clock = clock;
+
+        if (transactionManager != null) {
+            this.txTemplate = new TransactionTemplate(transactionManager);
+            this.readOnlyTxTemplate = new TransactionTemplate(transactionManager);
+            this.readOnlyTxTemplate.setReadOnly(true);
+            this.requiresNewTxTemplate = new TransactionTemplate(transactionManager);
+            this.requiresNewTxTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        } else {
+            this.txTemplate = null;
+            this.readOnlyTxTemplate = null;
+            this.requiresNewTxTemplate = null;
+        }
 
         if (!stravaProperties.isMockEnabled() && !stravaProperties.isConfigured()) {
             log.warn("Integração com Strava indisponível: defina STRAVA_CLIENT_ID e STRAVA_CLIENT_SECRET "
@@ -151,9 +188,8 @@ public class StravaService {
     /**
      * Conecta a conta Strava com o authorization code retornado no callback (US-14 C1).
      */
-    @Transactional(noRollbackFor = BusinessException.class)
     public StravaStatusResponseDTO conectar(Usuario usuario, StravaConectarRequestDTO dto) {
-        Aluno aluno = obterAlunoPorUsuario(usuario);
+        inReadOnlyTx(() -> obterAlunoPorUsuario(usuario));
 
         String code = dto != null ? dto.code() : null;
         if (code == null || code.isBlank()) {
@@ -161,23 +197,26 @@ public class StravaService {
         }
 
         if (stravaProperties.isMockEnabled()) {
-            log.info("Conectando Strava em modo mock para o aluno id={}", aluno.getId());
-            return salvarIntegracao(
-                    aluno,
-                    usuario,
-                    new TokenStrava("mock_access_token_" + aluno.getId(), "mock_refresh_token_" + aluno.getId(),
-                            OffsetDateTime.now(clock).plusDays(30)),
-                    999000L,
-                    usuario.getNome() != null ? usuario.getNome() : "Atleta Strava (Demo)",
-                    SCOPES_SOLICITADOS,
-                    true
-            );
+            return inTx(() -> {
+                Aluno aluno = obterAlunoPorUsuario(usuario);
+                log.info("Conectando Strava em modo mock para o aluno id={}", aluno.getId());
+                return salvarIntegracao(
+                        aluno,
+                        usuario,
+                        new TokenStrava("mock_access_token_" + aluno.getId(), "mock_refresh_token_" + aluno.getId(),
+                                OffsetDateTime.now(clock).plusDays(30)),
+                        999000L,
+                        usuario.getNome() != null ? usuario.getNome() : "Atleta Strava (Demo)",
+                        SCOPES_SOLICITADOS,
+                        true
+                );
+            });
         }
 
         exigirCredenciais();
 
         if (!stateValido(dto.state(), usuario.getId())) {
-            log.warn("Callback do Strava com state ausente, inválido ou expirado para o aluno id={}", aluno.getId());
+            log.warn("Callback do Strava com state ausente, inválido ou expirado para o usuario id={}", usuario.getId());
             throw new BusinessException(MSG_ERRO_CONEXAO);
         }
 
@@ -222,39 +261,41 @@ public class StravaService {
             throw new BusinessException(MSG_ERRO_CONEXAO);
         }
 
-        if (atletaId != null && integracaoStravaRepository.existsByAtletaIdAndAlunoIdNot(atletaId, aluno.getId())) {
-            log.warn("Atleta Strava id={} já vinculado a outro aluno; conexão recusada para o aluno id={}", atletaId, aluno.getId());
-            throw new DuplicateResourceException("Esta conta do Strava já está vinculada a outro aluno.");
-        }
+        String nomeAtletaFinal = nomeAtleta;
+        return inTx(() -> {
+            Aluno aluno = obterAlunoPorUsuario(usuario);
+            if (atletaId != null && integracaoStravaRepository.existsByAtletaIdAndAlunoIdNot(atletaId, aluno.getId())) {
+                log.warn("Atleta Strava id={} já vinculado a outro aluno; conexão recusada para o aluno id={}", atletaId, aluno.getId());
+                throw new DuplicateResourceException("Esta conta do Strava já está vinculada a outro aluno.");
+            }
 
-        log.info("Strava conectado com sucesso para o aluno id={}, atletaId={}", aluno.getId(), atletaId);
-        return salvarIntegracao(aluno, usuario, token, atletaId, nomeAtleta, dto.scope(), false);
+            log.info("Strava conectado com sucesso para o aluno id={}, atletaId={}", aluno.getId(), atletaId);
+            return salvarIntegracao(aluno, usuario, token, atletaId, nomeAtletaFinal, dto.scope(), false);
+        });
     }
 
     /**
      * Consulta o status da integração Strava para o aluno logado.
      */
-    @Transactional(noRollbackFor = BusinessException.class)
     public StravaStatusResponseDTO obterStatus(Usuario usuario) {
-        Aluno aluno = obterAlunoPorUsuario(usuario);
-        return obterStatusPorAluno(aluno);
+        ContextoIntegracao ctx = carregarContextoParaAlunoUsuario(usuario);
+        return obterStatusPorContexto(ctx);
     }
 
     /**
      * Consulta o status do Strava de um aluno a partir da visão do Personal Trainer.
      */
-    @Transactional(noRollbackFor = BusinessException.class)
     public StravaStatusResponseDTO obterStatusPorPersonal(UUID alunoId, UUID personalUsuarioId) {
-        return obterStatusPorAluno(obterAlunoDoPersonal(alunoId, personalUsuarioId));
+        ContextoIntegracao ctx = carregarContextoParaPersonal(alunoId, personalUsuarioId);
+        return obterStatusPorContexto(ctx);
     }
 
-    private StravaStatusResponseDTO obterStatusPorAluno(Aluno aluno) {
-        Optional<IntegracaoStrava> opt = buscarIntegracao(aluno);
-        if (opt.isEmpty()) {
+    private StravaStatusResponseDTO obterStatusPorContexto(ContextoIntegracao ctx) {
+        if (ctx.integracao() == null) {
             return new StravaStatusResponseDTO(false, false, null, null, false);
         }
 
-        IntegracaoStrava integracao = opt.get();
+        IntegracaoStrava integracao = ctx.integracao();
         boolean ehMock = isMockIntegracao(integracao);
 
         // US-14 C3: reconexão já pendente não gera nova chamada ao Strava nem nova notificação
@@ -264,9 +305,9 @@ public class StravaService {
 
         if (!ehMock) {
             try {
-                renovarTokenSeNecessario(integracao, aluno.getUsuario());
+                renovarTokenSeNecessario(integracao, ctx.alunoUsuario());
             } catch (BusinessException e) {
-                log.warn("Não foi possível renovar o token Strava do aluno id={}: {}", aluno.getId(), e.getMessage());
+                log.warn("Não foi possível renovar o token Strava do aluno id={}: {}", ctx.alunoId(), e.getMessage());
             }
         }
 
@@ -282,56 +323,75 @@ public class StravaService {
     /**
      * Desconecta a conta Strava do aluno: revoga a autorização no Strava e remove a integração.
      */
-    @Transactional(noRollbackFor = BusinessException.class)
     public void desconectar(Usuario usuario) {
-        Aluno aluno = obterAlunoPorUsuario(usuario);
-        Optional<IntegracaoStrava> opt = integracaoStravaRepository.findByAluno(aluno);
-        if (opt.isEmpty()) {
+        ContextoIntegracao ctx = inTx(() -> {
+            Aluno aluno = obterAlunoPorUsuario(usuario);
+            IntegracaoStrava integracao = integracaoStravaRepository.findByAluno(aluno).orElse(null);
+            return new ContextoIntegracao(aluno.getId(), inicializado(aluno.getUsuario()), integracao);
+        });
+
+        if (ctx.integracao() == null) {
             return;
         }
 
-        IntegracaoStrava integracao = opt.get();
+        IntegracaoStrava integracao = ctx.integracao();
         if (!isMockIntegracao(integracao) && stravaProperties.isConfigured()) {
             revogarAutorizacao(integracao, usuario);
         }
 
-        integracaoStravaRepository.delete(integracao);
-        notificacaoService.resolverStravaExpirado(usuario);
-        log.info("Integração com Strava removida para o aluno id={}", aluno.getId());
+        inTxVoid(() -> {
+            integracaoStravaRepository.delete(integracao);
+            notificacaoService.resolverStravaExpirado(usuario);
+            log.info("Integração com Strava removida para o aluno id={}", ctx.alunoId());
+        });
     }
 
     /**
      * Lista atividades recentes do Strava para o aluno logado (US-14 C2).
      */
-    @Transactional(noRollbackFor = BusinessException.class)
     public List<StravaAtividadeDTO> listarAtividadesRecentes(Usuario usuario, Integer limite) {
-        Aluno aluno = obterAlunoPorUsuario(usuario);
-        return listarAtividadesPorAluno(aluno, limite);
+        ContextoIntegracao ctx = carregarContextoParaAlunoUsuario(usuario);
+        return listarAtividadesPorContexto(ctx, limite);
     }
 
     /**
      * Lista atividades recentes do aluno para o personal trainer.
      */
-    @Transactional(noRollbackFor = BusinessException.class)
     public List<StravaAtividadeDTO> listarAtividadesPorPersonal(UUID alunoId, UUID personalUsuarioId, Integer limite) {
-        return listarAtividadesPorAluno(obterAlunoDoPersonal(alunoId, personalUsuarioId), limite);
+        ContextoIntegracao ctx = carregarContextoParaPersonal(alunoId, personalUsuarioId);
+        return listarAtividadesPorContexto(ctx, limite);
     }
 
-    private List<StravaAtividadeDTO> listarAtividadesPorAluno(Aluno aluno, Integer limite) {
-        IntegracaoStrava integracao = buscarIntegracao(aluno)
-                .orElseThrow(() -> new BusinessException("Conta Strava não conectada. Conecte sua conta do Strava nas configurações."));
+    /**
+     * Obtém os detalhes completos de uma atividade do Strava para o aluno logado (inclui calorias).
+     */
+    public StravaAtividadeDTO obterDetalheAtividade(Usuario usuario, String atividadeId) {
+        ContextoIntegracao ctx = carregarContextoParaAlunoUsuario(usuario);
+        return obterDetalheAtividadePorContexto(ctx, atividadeId);
+    }
+
+    /**
+     * Obtém os detalhes completos de uma atividade do Strava do aluno para o personal trainer.
+     */
+    public StravaAtividadeDTO obterDetalheAtividadePorPersonal(UUID alunoId, UUID personalUsuarioId, String atividadeId) {
+        ContextoIntegracao ctx = carregarContextoParaPersonal(alunoId, personalUsuarioId);
+        return obterDetalheAtividadePorContexto(ctx, atividadeId);
+    }
+
+    private List<StravaAtividadeDTO> listarAtividadesPorContexto(ContextoIntegracao ctx, Integer limite) {
+        IntegracaoStrava integracao = exigirIntegracaoConectada(ctx);
 
         int max = (limite == null || limite <= 0) ? LIMITE_PADRAO : Math.min(limite, LIMITE_MAXIMO);
 
         if (isMockIntegracao(integracao)) {
-            return gerarAtividadesMock();
+            return gerarAtividadesMock(max);
         }
 
         if (integracao.isReconexaoPendente()) {
             throw new BusinessException(MSG_TOKEN_EXPIRADO);
         }
 
-        renovarTokenSeNecessario(integracao, aluno.getUsuario());
+        renovarTokenSeNecessario(integracao, ctx.alunoUsuario());
 
         try {
             String json = restClient.get()
@@ -353,20 +413,89 @@ public class StravaService {
             return lista;
 
         } catch (RestClientResponseException e) {
-            log.error("Erro ao buscar atividades no Strava: HTTP {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
-            if (e.getStatusCode().value() == 401) {
-                marcarReconexaoPendente(integracao, aluno.getUsuario());
-                // 401 com "activity:read_permission" indica escopo sem acesso às atividades, não token vencido
-                if (e.getResponseBodyAsString().contains("activity:read_permission")) {
-                    throw new BusinessException(MSG_SEM_PERMISSAO_ATIVIDADES);
-                }
-                throw new BusinessException(MSG_TOKEN_EXPIRADO);
-            }
+            tratarErroChamadaApiStrava(e, integracao, ctx.alunoUsuario(), "listar atividades");
             throw new BusinessException(MSG_FALHA_COMUNICACAO);
         } catch (Exception e) {
             log.error("Erro inesperado ao buscar atividades do Strava", e);
             throw new BusinessException(MSG_FALHA_COMUNICACAO);
         }
+    }
+
+    private StravaAtividadeDTO obterDetalheAtividadePorContexto(ContextoIntegracao ctx, String atividadeId) {
+        if (atividadeId == null || atividadeId.isBlank()) {
+            throw new BusinessException("Informe o identificador da atividade do Strava.");
+        }
+
+        IntegracaoStrava integracao = exigirIntegracaoConectada(ctx);
+        String idLimpo = atividadeId.trim();
+
+        if (isMockIntegracao(integracao)) {
+            return gerarAtividadesMock(LIMITE_MAXIMO).stream()
+                    .filter(a -> idLimpo.equals(a.id()))
+                    .findFirst()
+                    .orElseThrow(() -> new NotFoundException("Atividade do Strava não encontrada."));
+        }
+
+        if (integracao.isReconexaoPendente()) {
+            throw new BusinessException(MSG_TOKEN_EXPIRADO);
+        }
+
+        renovarTokenSeNecessario(integracao, ctx.alunoUsuario());
+
+        try {
+            String uri = STRAVA_API_ACTIVITY_DETAIL_URL + "/" + UriUtils.encodePathSegment(idLimpo, StandardCharsets.UTF_8);
+            String json = restClient.get()
+                    .uri(uri)
+                    .header("Authorization", "Bearer " + integracao.getAccessToken())
+                    .accept(MediaType.APPLICATION_JSON)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode item = objectMapper.readTree(json);
+            return converterJsonParaAtividadeDTO(item);
+        } catch (RestClientResponseException e) {
+            if (e.getStatusCode().value() == 404) {
+                throw new NotFoundException("Atividade não encontrada no Strava.");
+            }
+            tratarErroChamadaApiStrava(e, integracao, ctx.alunoUsuario(), "consultar detalhes da atividade id=" + idLimpo);
+            throw new BusinessException(MSG_FALHA_COMUNICACAO);
+        } catch (NotFoundException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Erro inesperado ao consultar detalhes da atividade id={} no Strava", idLimpo, e);
+            throw new BusinessException(MSG_FALHA_COMUNICACAO);
+        }
+    }
+
+    private void tratarErroChamadaApiStrava(
+            RestClientResponseException e,
+            IntegracaoStrava integracao,
+            Usuario alunoUsuario,
+            String contexto) {
+        int status = e.getStatusCode().value();
+        if (status == 429) {
+            String rateUsage = e.getResponseHeaders() != null
+                    ? e.getResponseHeaders().getFirst("X-RateLimit-Usage")
+                    : null;
+            log.warn("Rate limit do Strava (HTTP 429) ao {}: X-RateLimit-Usage={}", contexto, rateUsage);
+            throw new StravaRateLimitException(MSG_RATE_LIMIT);
+        }
+        log.error("Erro ao {} no Strava: HTTP {} - {}", contexto, e.getStatusCode(), e.getResponseBodyAsString());
+        if (status == 401) {
+            marcarReconexaoPendente(integracao, alunoUsuario);
+            if (e.getResponseBodyAsString().contains("activity:read_permission")) {
+                throw new BusinessException(MSG_SEM_PERMISSAO_ATIVIDADES);
+            }
+            throw new BusinessException(MSG_TOKEN_EXPIRADO);
+        }
+        throw new BusinessException(MSG_FALHA_COMUNICACAO);
+    }
+
+    private IntegracaoStrava exigirIntegracaoConectada(ContextoIntegracao ctx) {
+        if (ctx.integracao() == null) {
+            throw new BusinessException("Conta Strava não conectada. Conecte sua conta do Strava nas configurações.");
+        }
+        return ctx.integracao();
     }
 
     private void renovarTokenSeNecessario(IntegracaoStrava integracao, Usuario usuario) {
@@ -379,20 +508,24 @@ public class StravaService {
             return;
         }
 
-        Object lock = refreshLocks.computeIfAbsent(integracao.getId(), k -> new Object());
+        UUID lockKey = integracao.getId() != null
+                ? integracao.getId()
+                : (usuario != null && usuario.getId() != null ? usuario.getId() : UUID.randomUUID());
+        Object lock = refreshLocks.computeIfAbsent(lockKey, k -> new Object());
         synchronized (lock) {
             try {
-                // Re-consulta o banco caso outra thread já tenha renovado o token enquanto esta aguardava o lock
-                Optional<IntegracaoStrava> doBanco = integracaoStravaRepository.findById(integracao.getId());
+                // Re-consulta o banco em tx curta caso outra thread já tenha renovado o token enquanto esta aguardava o lock
+                Optional<IntegracaoStrava> doBanco = inReadOnlyTx(() ->
+                        integracao.getId() != null ? integracaoStravaRepository.findById(integracao.getId()) : Optional.empty()
+                );
                 if (doBanco.isPresent()) {
                     IntegracaoStrava atual = doBanco.get();
                     if (atual.getExpiraEm().isAfter(OffsetDateTime.now(clock).plus(ANTECEDENCIA_RENOVACAO))) {
-                        integracao.setAccessToken(atual.getAccessToken());
-                        integracao.setRefreshToken(atual.getRefreshToken());
-                        integracao.setExpiraEm(atual.getExpiraEm());
-                        integracao.setReconexaoPendente(atual.isReconexaoPendente());
+                        copiarEstadoToken(atual, integracao);
                         return;
                     }
+                    integracao.setRefreshToken(atual.getRefreshToken());
+                    integracao.setReconexaoPendente(atual.isReconexaoPendente());
                 }
 
                 exigirCredenciais();
@@ -417,16 +550,13 @@ public class StravaService {
                     token = lerToken(objectMapper.readTree(responseBody));
                 } catch (RestClientResponseException e) {
                     log.error("Strava recusou a renovação do token: HTTP {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
-                    // 400/401 indicam refresh token inválido ou revogado; 429 e 5xx são transitórios
                     int status = e.getStatusCode().value();
                     if (status == 400 || status == 401) {
-                        // Antes de marcar como reconexão pendente, verifica se outra thread concorrente acabou de renovar
-                        Optional<IntegracaoStrava> recheck = integracaoStravaRepository.findById(integracao.getId());
+                        Optional<IntegracaoStrava> recheck = inReadOnlyTx(() ->
+                                integracao.getId() != null ? integracaoStravaRepository.findById(integracao.getId()) : Optional.empty()
+                        );
                         if (recheck.isPresent() && recheck.get().getExpiraEm().isAfter(OffsetDateTime.now(clock).plus(ANTECEDENCIA_RENOVACAO))) {
-                            integracao.setAccessToken(recheck.get().getAccessToken());
-                            integracao.setRefreshToken(recheck.get().getRefreshToken());
-                            integracao.setExpiraEm(recheck.get().getExpiraEm());
-                            integracao.setReconexaoPendente(recheck.get().isReconexaoPendente());
+                            copiarEstadoToken(recheck.get(), integracao);
                             return;
                         }
                         marcarReconexaoPendente(integracao, usuario);
@@ -434,18 +564,26 @@ public class StravaService {
                     }
                     throw new BusinessException(MSG_FALHA_COMUNICACAO);
                 } catch (Exception e) {
-                    // Falha de rede ou resposta inválida: não exige reconexão, apenas tenta de novo depois
                     log.error("Falha ao renovar token do Strava: {}", e.getMessage());
                     throw new BusinessException(MSG_FALHA_COMUNICACAO);
                 }
 
-                integracao.setAccessToken(token.accessToken());
-                integracao.setRefreshToken(token.refreshToken());
-                integracao.setExpiraEm(token.expiraEm());
-                integracaoStravaRepository.save(integracao);
+                TokenStrava novoToken = token;
+                inTxVoid(() -> {
+                    IntegracaoStrava destino = integracao.getId() != null
+                            ? integracaoStravaRepository.findById(integracao.getId()).orElse(integracao)
+                            : integracao;
+                    destino.setAccessToken(novoToken.accessToken());
+                    destino.setRefreshToken(novoToken.refreshToken());
+                    destino.setExpiraEm(novoToken.expiraEm());
+                    integracaoStravaRepository.save(destino);
+                    if (destino != integracao) {
+                        copiarEstadoToken(destino, integracao);
+                    }
+                });
                 log.info("Token Strava renovado com sucesso para a integracao id={}", integracao.getId());
             } finally {
-                refreshLocks.remove(integracao.getId(), lock);
+                refreshLocks.remove(lockKey, lock);
             }
         }
     }
@@ -455,8 +593,19 @@ public class StravaService {
             return;
         }
         integracao.setReconexaoPendente(true);
-        integracaoStravaRepository.save(integracao);
-        notificacaoService.notificarStravaExpirado(usuario);
+        inRequiresNewTx(() -> {
+            IntegracaoStrava destino = integracao.getId() != null
+                    ? integracaoStravaRepository.findById(integracao.getId()).orElse(integracao)
+                    : integracao;
+            destino.setReconexaoPendente(true);
+            integracaoStravaRepository.save(destino);
+            Usuario usuarioNotificar = (destino.getAluno() != null && destino.getAluno().getUsuario() != null)
+                    ? destino.getAluno().getUsuario()
+                    : usuario;
+            if (usuarioNotificar != null) {
+                notificacaoService.notificarStravaExpirado(usuarioNotificar);
+            }
+        });
     }
 
     private void revogarAutorizacao(IntegracaoStrava integracao, Usuario usuario) {
@@ -514,15 +663,11 @@ public class StravaService {
         String distanciaFormatada = String.format(PT_BR, "%.2f km", distanciaKm);
 
         int movingTime = item.path("moving_time").asInt(item.path("elapsed_time").asInt(0));
-        long min = movingTime / 60;
-        long sec = movingTime % 60;
-        String tempoFormatado = String.format("%02d:%02d", min, sec);
-        int duracaoMinutos = (int) Math.round(movingTime / 60.0);
+        String tempoFormatado = FormatadorTempo.formatarTempoSegundos(Math.max(0, movingTime));
+        Integer duracaoMinutos = movingTime <= 0 ? null : Math.max(1, (int) Math.round(movingTime / 60.0));
 
         int elapsedTime = item.path("elapsed_time").asInt(movingTime);
-        long elMin = elapsedTime / 60;
-        long elSec = elapsedTime % 60;
-        String tempoTotalFormatado = String.format("%02d:%02d", elMin, elSec);
+        String tempoTotalFormatado = FormatadorTempo.formatarTempoSegundos(Math.max(0, elapsedTime));
 
         Integer hrMedia = item.hasNonNull("average_heartrate")
                 ? (int) Math.round(item.path("average_heartrate").asDouble(0.0))
@@ -531,11 +676,18 @@ public class StravaService {
                 ? (int) Math.round(item.path("max_heartrate").asDouble(0.0))
                 : null;
 
-        String ritmoMedio = calcularRitmo(tipo, distanciaMetros, movingTime);
+        Double averageSpeedMs = item.hasNonNull("average_speed") ? item.path("average_speed").asDouble() : null;
+        String ritmoMedio = calcularRitmo(averageSpeedMs, distanciaMetros, movingTime, tipo);
 
-        Double cadenciaMedia = item.hasNonNull("average_cadence")
-                ? BigDecimal.valueOf(item.path("average_cadence").asDouble()).setScale(1, RoundingMode.HALF_UP).doubleValue()
-                : null;
+        Double cadenciaMedia = null;
+        if (item.hasNonNull("average_cadence")) {
+            double cadenciaBruta = item.path("average_cadence").asDouble();
+            if (tipo != null && ESPORTES_CORRIDA_CAMINHADA.contains(tipo.toLowerCase(Locale.ROOT))) {
+                cadenciaMedia = (double) Math.round(cadenciaBruta * 2.0);
+            } else {
+                cadenciaMedia = BigDecimal.valueOf(cadenciaBruta).setScale(1, RoundingMode.HALF_UP).doubleValue();
+            }
+        }
         Double potenciaMediaWatts = item.hasNonNull("average_watts")
                 ? BigDecimal.valueOf(item.path("average_watts").asDouble()).setScale(1, RoundingMode.HALF_UP).doubleValue()
                 : null;
@@ -545,9 +697,17 @@ public class StravaService {
         Double elevacaoGanhoMetros = item.hasNonNull("total_elevation_gain")
                 ? BigDecimal.valueOf(item.path("total_elevation_gain").asDouble()).setScale(1, RoundingMode.HALF_UP).doubleValue()
                 : null;
-        Double velMediaKmh = item.hasNonNull("average_speed")
-                ? BigDecimal.valueOf(item.path("average_speed").asDouble() * 3.6).setScale(1, RoundingMode.HALF_UP).doubleValue()
-                : null;
+
+        Double velMediaKmh = null;
+        if (averageSpeedMs != null && averageSpeedMs > 0.0) {
+            velMediaKmh = BigDecimal.valueOf(averageSpeedMs * 3.6).setScale(1, RoundingMode.HALF_UP).doubleValue();
+        } else if (distanciaMetros > 10.0 && movingTime > 0) {
+            velMediaKmh = BigDecimal.valueOf((distanciaMetros / 1000.0) / (movingTime / 3600.0))
+                    .setScale(1, RoundingMode.HALF_UP)
+                    .doubleValue();
+        } else if (averageSpeedMs != null) {
+            velMediaKmh = 0.0;
+        }
         Double velMaximaKmh = item.hasNonNull("max_speed")
                 ? BigDecimal.valueOf(item.path("max_speed").asDouble() * 3.6).setScale(1, RoundingMode.HALF_UP).doubleValue()
                 : null;
@@ -613,36 +773,51 @@ public class StravaService {
         return dataHora != null ? dataHora.toLocalDate() : null;
     }
 
-    private String calcularRitmo(String tipo, double distanciaMetros, int movingTime) {
-        if (distanciaMetros <= 10.0 || movingTime <= 0) {
+    private String calcularRitmo(Double averageSpeed, double distanciaMetros, int movingTime, String sportType) {
+        String tipoNormalizado = sportType != null ? sportType.toLowerCase(Locale.ROOT) : "";
+        if (tipoNormalizado.contains("ride")) {
             return null;
         }
 
-        String tipoNormalizado = tipo != null ? tipo.toLowerCase() : "";
-        if (tipoNormalizado.contains("swim")) {
-            double segPor100m = movingTime / (distanciaMetros / 100.0);
-            return String.format("%02d:%02d min/100m", (long) (segPor100m / 60), (long) (segPor100m % 60));
-        }
-        if (tipoNormalizado.contains("ride")) {
-            double kmPorHora = (distanciaMetros / 1000.0) / (movingTime / 3600.0);
-            return String.format(PT_BR, "%.1f km/h", kmPorHora);
+        double velocidadeMs;
+        if (averageSpeed != null && averageSpeed > 0.0) {
+            velocidadeMs = averageSpeed;
+        } else if (distanciaMetros > 10.0 && movingTime > 0) {
+            velocidadeMs = distanciaMetros / movingTime;
+        } else {
+            return null;
         }
 
-        double paceSegPorKm = movingTime / (distanciaMetros / 1000.0);
-        return String.format("%02d:%02d min/km", (long) (paceSegPorKm / 60), (long) (paceSegPorKm % 60));
+        double segundosPorUnidade;
+        if (tipoNormalizado.contains("swim")) {
+            segundosPorUnidade = 100.0 / velocidadeMs;
+        } else if (tipoNormalizado.contains("rowing") || tipoNormalizado.contains("virtualrow")) {
+            segundosPorUnidade = 500.0 / velocidadeMs;
+        } else {
+            segundosPorUnidade = 1000.0 / velocidadeMs;
+        }
+
+        int paceSegundos = (int) Math.round(segundosPorUnidade);
+        if (paceSegundos <= 0) {
+            return null;
+        }
+        long min = paceSegundos / 60;
+        long sec = paceSegundos % 60;
+        return String.format("%02d:%02d", min, sec);
     }
 
-    private List<StravaAtividadeDTO> gerarAtividadesMock() {
+    private List<StravaAtividadeDTO> gerarAtividadesMock(int limite) {
         LocalDate hoje = LocalDate.now(clock);
+        ZoneOffset offset = ZoneOffset.ofHours(-3);
 
-        return List.of(
+        List<StravaAtividadeDTO> todas = List.of(
                 new StravaAtividadeDTO(
                         "mock-act-1",
                         "Corrida Matinal no Parque",
                         "Run",
                         "Corrida",
                         hoje.minusDays(1),
-                        hoje.minusDays(1).atTime(7, 30).atOffset(ZoneOffset.ofHours(-3)),
+                        hoje.minusDays(1).atTime(7, 30).atOffset(offset),
                         5230.5,
                         5.23,
                         "5,23 km",
@@ -651,7 +826,7 @@ public class StravaService {
                         27,
                         154,
                         172,
-                        "05:13 min/km",
+                        "05:13",
                         "28:10",
                         166.0,
                         null,
@@ -667,7 +842,7 @@ public class StravaService {
                         "Run",
                         "Corrida",
                         hoje.minusDays(3),
-                        hoje.minusDays(3).atTime(18, 15).atOffset(ZoneOffset.ofHours(-3)),
+                        hoje.minusDays(3).atTime(18, 15).atOffset(offset),
                         3500.0,
                         3.50,
                         "3,50 km",
@@ -676,7 +851,7 @@ public class StravaService {
                         17,
                         168,
                         185,
-                        "04:51 min/km",
+                        "04:51",
                         "17:45",
                         174.0,
                         null,
@@ -692,7 +867,7 @@ public class StravaService {
                         "Ride",
                         "Ciclismo",
                         hoje.minusDays(5),
-                        hoje.minusDays(5).atTime(8, 0).atOffset(ZoneOffset.ofHours(-3)),
+                        hoje.minusDays(5).atTime(8, 0).atOffset(offset),
                         21400.0,
                         21.40,
                         "21,40 km",
@@ -701,7 +876,7 @@ public class StravaService {
                         52,
                         142,
                         160,
-                        "24,7 km/h",
+                        null,
                         "55:30",
                         82.0,
                         185.0,
@@ -710,8 +885,85 @@ public class StravaService {
                         24.7,
                         42.5,
                         610.0
+                ),
+                new StravaAtividadeDTO(
+                        "mock-act-4",
+                        "Longão de Domingo 15 km",
+                        "Run",
+                        "Corrida",
+                        hoje.minusDays(7),
+                        hoje.minusDays(7).atTime(6, 30).atOffset(offset),
+                        15000.0,
+                        15.0,
+                        "15,00 km",
+                        4800,
+                        "01:20:00",
+                        80,
+                        158,
+                        176,
+                        "05:20",
+                        "01:22:30",
+                        168.0,
+                        null,
+                        null,
+                        120.0,
+                        11.3,
+                        14.5,
+                        920.0
+                ),
+                new StravaAtividadeDTO(
+                        "mock-act-5",
+                        "Natação Contínua 1500m",
+                        "Swim",
+                        "Natação",
+                        hoje.minusDays(8),
+                        hoje.minusDays(8).atTime(7, 0).atOffset(offset),
+                        1500.0,
+                        1.5,
+                        "1,50 km",
+                        1800,
+                        "30:00",
+                        30,
+                        148,
+                        165,
+                        "02:00",
+                        "32:00",
+                        30.0,
+                        null,
+                        null,
+                        null,
+                        3.0,
+                        3.8,
+                        310.0
+                ),
+                new StravaAtividadeDTO(
+                        "mock-act-6",
+                        "Remo Ergômetro 5 km",
+                        "Rowing",
+                        "Remo",
+                        hoje.minusDays(9),
+                        hoje.minusDays(9).atTime(17, 30).atOffset(offset),
+                        5000.0,
+                        5.0,
+                        "5,00 km",
+                        1260,
+                        "21:00",
+                        21,
+                        160,
+                        178,
+                        "02:06",
+                        "21:30",
+                        28.0,
+                        220.0,
+                        310.0,
+                        null,
+                        14.3,
+                        17.0,
+                        290.0
                 )
         );
+
+        return todas.subList(0, Math.min(Math.max(limite, 0), todas.size()));
     }
 
     private String traduzirEsporte(String tipo) {
@@ -864,6 +1116,68 @@ public class StravaService {
             throw new BusinessException("Apenas alunos podem vincular sua conta do Strava.");
         }
     }
+
+    private ContextoIntegracao carregarContextoParaAlunoUsuario(Usuario usuario) {
+        return inTx(() -> {
+            Aluno aluno = obterAlunoPorUsuario(usuario);
+            IntegracaoStrava integracao = buscarIntegracao(aluno).orElse(null);
+            return new ContextoIntegracao(aluno.getId(), inicializado(usuario), integracao);
+        });
+    }
+
+    private ContextoIntegracao carregarContextoParaPersonal(UUID alunoId, UUID personalUsuarioId) {
+        return inTx(() -> {
+            Aluno aluno = obterAlunoDoPersonal(alunoId, personalUsuarioId);
+            IntegracaoStrava integracao = buscarIntegracao(aluno).orElse(null);
+            return new ContextoIntegracao(aluno.getId(), inicializado(aluno.getUsuario()), integracao);
+        });
+    }
+
+    private Usuario inicializado(Usuario usuario) {
+        if (usuario != null) {
+            usuario.getId();
+            usuario.getNome();
+        }
+        return usuario;
+    }
+
+    private void copiarEstadoToken(IntegracaoStrava origem, IntegracaoStrava destino) {
+        destino.setAccessToken(origem.getAccessToken());
+        destino.setRefreshToken(origem.getRefreshToken());
+        destino.setExpiraEm(origem.getExpiraEm());
+        destino.setReconexaoPendente(origem.isReconexaoPendente());
+    }
+
+    private <T> T inTx(java.util.function.Supplier<T> action) {
+        if (txTemplate == null) {
+            return action.get();
+        }
+        return txTemplate.execute(status -> action.get());
+    }
+
+    private void inTxVoid(Runnable action) {
+        inTx(() -> {
+            action.run();
+            return null;
+        });
+    }
+
+    private <T> T inReadOnlyTx(java.util.function.Supplier<T> action) {
+        if (readOnlyTxTemplate == null) {
+            return action.get();
+        }
+        return readOnlyTxTemplate.execute(status -> action.get());
+    }
+
+    private void inRequiresNewTx(Runnable action) {
+        if (requiresNewTxTemplate == null) {
+            action.run();
+            return;
+        }
+        requiresNewTxTemplate.executeWithoutResult(status -> action.run());
+    }
+
+    private record ContextoIntegracao(UUID alunoId, Usuario alunoUsuario, IntegracaoStrava integracao) {}
 
     private record TokenStrava(String accessToken, String refreshToken, OffsetDateTime expiraEm) {}
 }
