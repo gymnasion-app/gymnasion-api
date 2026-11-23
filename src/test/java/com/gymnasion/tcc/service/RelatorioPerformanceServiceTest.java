@@ -585,7 +585,9 @@ class RelatorioPerformanceServiceTest {
                 .contains("16/03/2026")
                 .doesNotContain("10/03/2026")
                 .doesNotContain("09/03/2026")
-                .doesNotContain("1.800");
+                // O valor 1.800 pode aparecer como marca do eixo Y; a exclusão é verificada pela contagem de registros
+                .contains("02/03/2026 – 16/03/2026 · 2 registros")
+                .doesNotContain("3 registros");
     }
 
     @Test

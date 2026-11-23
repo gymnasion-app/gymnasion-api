@@ -143,7 +143,7 @@ public class MetricaService {
             String trimmed = dto.unidade().trim();
             if (trimmed.isEmpty()) {
                 if (possuiHistorico && unidadeAtual != null) {
-                    throw new BusinessException("Métrica com histórico não permite alterar tipo ou unidade.");
+                    throw new BusinessException("Não é possível alterar a unidade de uma métrica com histórico de registros. Crie uma nova métrica.");
                 }
                 if (tipoFinal == TipoMetrica.TEMPO || tipoFinal == TipoMetrica.FREQUENCIA_CARDIACA) {
                     throw new BusinessException("Este tipo de métrica exige uma unidade de medida.");
@@ -151,7 +151,7 @@ public class MetricaService {
                 unidadeFinal = null;
             } else {
                 if (possuiHistorico && !Objects.equals(trimmed, unidadeAtual)) {
-                    throw new BusinessException("Métrica com histórico não permite alterar tipo ou unidade.");
+                    throw new BusinessException("Não é possível alterar a unidade de uma métrica com histórico de registros. Crie uma nova métrica.");
                 }
                 unidadeFinal = normalizarUnidade(tipoFinal, trimmed, dto.campoStrava(), metrica.getModalidade().getNome());
             }
@@ -271,6 +271,11 @@ public class MetricaService {
         Set<UUID> concluidas = sessaoTreinoRepository.findMetricaIdsByStatus(ids, StatusSessaoTreino.CONCLUIDA);
         if (concluidas != null) {
             comHistorico.addAll(concluidas);
+        }
+        // B3: mesmo critério de atualizarMetrica (registros, sessões concluídas e auditoria)
+        Set<UUID> auditadas = auditoriaDesempenhoRepository.findMetricaIdsWithAuditoria(ids);
+        if (auditadas != null) {
+            comHistorico.addAll(auditadas);
         }
         return comHistorico;
     }

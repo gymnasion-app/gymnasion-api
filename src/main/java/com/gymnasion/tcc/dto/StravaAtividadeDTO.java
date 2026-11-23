@@ -47,7 +47,7 @@ public record StravaAtividadeDTO(
         @Schema(description = "Frequência cardíaca máxima em bpm", example = "175")
         Integer frequenciaCardiacaMaxima,
 
-        @Schema(description = "Ritmo médio com unidade da modalidade: min/km (corrida e caminhada), min/100m (natação) ou km/h (ciclismo)", example = "05:13 min/km")
+        @Schema(description = "Ritmo médio mm:ss calculado pelo tipo da atividade: por 100 m (natação), por 500 m (remo) ou por km (demais); nulo em pedal. Para converter à unidade da métrica, use velocidadeMediaMs", example = "05:13")
         String ritmoMedio,
 
         @Schema(description = "Tempo total decorrido formatado no padrão MM:SS ou HH:MM:SS", example = "28:10")
@@ -72,5 +72,21 @@ public record StravaAtividadeDTO(
         Double velocidadeMaximaKmh,
 
         @Schema(description = "Gasto calórico estimado", example = "380.0")
-        Double calorias
-) {}
+        Double calorias,
+
+        @Schema(description = "Velocidade média bruta em m/s, base para converter o ritmo à unidade da métrica (min/km, min/100m, min/500m)", example = "3.199")
+        Double velocidadeMediaMs
+) {
+    public StravaAtividadeDTO(String id, String nome, String tipo, String esporte, LocalDate data, OffsetDateTime dataHora,
+                              Double distanciaMetros, Double distanciaKm, String distanciaFormatada, Integer tempoSegundos,
+                              String tempoFormatado, Integer duracaoMinutos, Integer frequenciaCardiacaMedia,
+                              Integer frequenciaCardiacaMaxima, String ritmoMedio, String tempoTotalFormatado,
+                              Double cadenciaMedia, Double potenciaMediaWatts, Double potenciaMaximaWatts,
+                              Double elevacaoGanhoMetros, Double velocidadeMediaKmh, Double velocidadeMaximaKmh,
+                              Double calorias) {
+        this(id, nome, tipo, esporte, data, dataHora, distanciaMetros, distanciaKm, distanciaFormatada, tempoSegundos,
+                tempoFormatado, duracaoMinutos, frequenciaCardiacaMedia, frequenciaCardiacaMaxima, ritmoMedio,
+                tempoTotalFormatado, cadenciaMedia, potenciaMediaWatts, potenciaMaximaWatts, elevacaoGanhoMetros,
+                velocidadeMediaKmh, velocidadeMaximaKmh, calorias, null);
+    }
+}

@@ -77,6 +77,18 @@ public class StravaService {
     private static final String MSG_TOKEN_EXPIRADO = "O token de acesso do Strava expirou. Por favor, reconecte sua conta.";
     private static final String MSG_FALHA_COMUNICACAO = "Falha ao carregar atividades do Strava. Tente novamente mais tarde.";
     private static final String MSG_RATE_LIMIT = "Limite temporário de requisições do Strava atingido. Preencha os dados manualmente se necessário.";
+    private static final String MSG_LIMITE_POR_ALUNO = "Muitas consultas ao Strava em pouco tempo. Aguarde alguns minutos ou preencha os dados manualmente.";
+    private static final String MSG_ID_ATIVIDADE_INVALIDO = "Identificador de atividade do Strava inválido.";
+    private static final String MSG_ATIVIDADE_NAO_ENCONTRADA = "Atividade do Strava não encontrada.";
+
+    // M3: protege a cota do app no Strava (compartilhada entre todos os usuários) com cache curto e limite por aluno.
+    // Estado em memória, por instância: suficiente enquanto a API roda em um único container.
+    private static final java.util.regex.Pattern ID_ATIVIDADE_STRAVA = java.util.regex.Pattern.compile("^\\d{1,20}$");
+    private static final Duration TTL_CACHE_DETALHE = Duration.ofMinutes(10);
+    private static final Duration TTL_CACHE_LISTAGEM = Duration.ofSeconds(60);
+    private static final Duration JANELA_LIMITE_POR_ALUNO = Duration.ofMinutes(15);
+    private static final int LIMITE_CHAMADAS_POR_ALUNO = 20;
+    private static final int TAMANHO_PARA_LIMPEZA_CACHE = 500;
 
     private final IntegracaoStravaRepository integracaoStravaRepository;
     private final AlunoRepository alunoRepository;
@@ -89,6 +101,9 @@ public class StravaService {
     private final TransactionTemplate readOnlyTxTemplate;
     private final TransactionTemplate requiresNewTxTemplate;
     private final ConcurrentHashMap<UUID, Object> refreshLocks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, EntradaCache<StravaAtividadeDTO>> cacheDetalhe = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, EntradaCache<List<StravaAtividadeDTO>>> cacheListagem = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Deque<Instant>> chamadasPorAluno = new ConcurrentHashMap<>();
 
     @Autowired
     public StravaService(
@@ -339,6 +354,7 @@ public class StravaService {
             revogarAutorizacao(integracao, usuario);
         }
 
+        limparCacheDoAluno(ctx.alunoId());
         inTxVoid(() -> {
             integracaoStravaRepository.delete(integracao);
             notificacaoService.resolverStravaExpirado(usuario);
@@ -391,6 +407,13 @@ public class StravaService {
             throw new BusinessException(MSG_TOKEN_EXPIRADO);
         }
 
+        String chaveCache = ctx.alunoId() + ":" + max;
+        List<StravaAtividadeDTO> emCache = lerCache(cacheListagem, chaveCache);
+        if (emCache != null) {
+            return emCache;
+        }
+        registrarChamadaStrava(ctx.alunoId());
+
         renovarTokenSeNecessario(integracao, ctx.alunoUsuario());
 
         try {
@@ -410,7 +433,9 @@ public class StravaService {
                 }
             }
 
-            return lista;
+            List<StravaAtividadeDTO> resultado = List.copyOf(lista);
+            gravarCache(cacheListagem, chaveCache, resultado, TTL_CACHE_LISTAGEM);
+            return resultado;
 
         } catch (RestClientResponseException e) {
             tratarErroChamadaApiStrava(e, integracao, ctx.alunoUsuario(), "listar atividades");
@@ -436,9 +461,20 @@ public class StravaService {
                     .orElseThrow(() -> new NotFoundException("Atividade do Strava não encontrada."));
         }
 
+        if (!ID_ATIVIDADE_STRAVA.matcher(idLimpo).matches()) {
+            throw new BusinessException(MSG_ID_ATIVIDADE_INVALIDO);
+        }
+
         if (integracao.isReconexaoPendente()) {
             throw new BusinessException(MSG_TOKEN_EXPIRADO);
         }
+
+        String chaveCache = ctx.alunoId() + ":" + idLimpo;
+        StravaAtividadeDTO emCache = lerCache(cacheDetalhe, chaveCache);
+        if (emCache != null) {
+            return emCache;
+        }
+        registrarChamadaStrava(ctx.alunoId());
 
         renovarTokenSeNecessario(integracao, ctx.alunoUsuario());
 
@@ -452,10 +488,19 @@ public class StravaService {
                     .body(String.class);
 
             JsonNode item = objectMapper.readTree(json);
-            return converterJsonParaAtividadeDTO(item);
+            // M3: a API do Strava também devolve atividades públicas de outros atletas; só aceita as do atleta conectado
+            JsonNode atletaNode = item.path("athlete").path("id");
+            if (integracao.getAtletaId() != null && !atletaNode.isMissingNode() && !atletaNode.isNull()
+                    && atletaNode.asLong(-1L) != integracao.getAtletaId()) {
+                log.warn("Atividade id={} pertence a outro atleta; acesso recusado para o aluno id={}", idLimpo, ctx.alunoId());
+                throw new NotFoundException(MSG_ATIVIDADE_NAO_ENCONTRADA);
+            }
+            StravaAtividadeDTO detalhe = converterJsonParaAtividadeDTO(item);
+            gravarCache(cacheDetalhe, chaveCache, detalhe, TTL_CACHE_DETALHE);
+            return detalhe;
         } catch (RestClientResponseException e) {
             if (e.getStatusCode().value() == 404) {
-                throw new NotFoundException("Atividade não encontrada no Strava.");
+                throw new NotFoundException(MSG_ATIVIDADE_NAO_ENCONTRADA);
             }
             tratarErroChamadaApiStrava(e, integracao, ctx.alunoUsuario(), "consultar detalhes da atividade id=" + idLimpo);
             throw new BusinessException(MSG_FALHA_COMUNICACAO);
@@ -551,6 +596,9 @@ public class StravaService {
                 } catch (RestClientResponseException e) {
                     log.error("Strava recusou a renovação do token: HTTP {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
                     int status = e.getStatusCode().value();
+                    if (status == 429) {
+                        throw new StravaRateLimitException(MSG_RATE_LIMIT);
+                    }
                     if (status == 400 || status == 401) {
                         Optional<IntegracaoStrava> recheck = inReadOnlyTx(() ->
                                 integracao.getId() != null ? integracaoStravaRepository.findById(integracao.getId()) : Optional.empty()
@@ -678,6 +726,7 @@ public class StravaService {
 
         Double averageSpeedMs = item.hasNonNull("average_speed") ? item.path("average_speed").asDouble() : null;
         String ritmoMedio = calcularRitmo(averageSpeedMs, distanciaMetros, movingTime, tipo);
+        Double velocidadeMediaMs = calcularVelocidadeMs(averageSpeedMs, distanciaMetros, movingTime);
 
         Double cadenciaMedia = null;
         if (item.hasNonNull("average_cadence")) {
@@ -737,8 +786,21 @@ public class StravaService {
                 elevacaoGanhoMetros,
                 velMediaKmh,
                 velMaximaKmh,
-                calorias
+                calorias,
+                velocidadeMediaMs
         );
+    }
+
+    private Double calcularVelocidadeMs(Double averageSpeed, double distanciaMetros, int movingTime) {
+        double velocidade;
+        if (averageSpeed != null && averageSpeed > 0.0) {
+            velocidade = averageSpeed;
+        } else if (distanciaMetros > 10.0 && movingTime > 0) {
+            velocidade = distanciaMetros / movingTime;
+        } else {
+            return null;
+        }
+        return BigDecimal.valueOf(velocidade).setScale(3, RoundingMode.HALF_UP).doubleValue();
     }
 
     /**
@@ -834,7 +896,8 @@ public class StravaService {
                         45.0,
                         11.5,
                         15.8,
-                        385.0
+                        385.0,
+                        3.199
                 ),
                 new StravaAtividadeDTO(
                         "mock-act-2",
@@ -859,7 +922,8 @@ public class StravaService {
                         22.0,
                         12.4,
                         18.0,
-                        260.0
+                        260.0,
+                        3.431
                 ),
                 new StravaAtividadeDTO(
                         "mock-act-3",
@@ -884,7 +948,8 @@ public class StravaService {
                         210.0,
                         24.7,
                         42.5,
-                        610.0
+                        610.0,
+                        6.859
                 ),
                 new StravaAtividadeDTO(
                         "mock-act-4",
@@ -909,7 +974,8 @@ public class StravaService {
                         120.0,
                         11.3,
                         14.5,
-                        920.0
+                        920.0,
+                        3.125
                 ),
                 new StravaAtividadeDTO(
                         "mock-act-5",
@@ -934,7 +1000,8 @@ public class StravaService {
                         null,
                         3.0,
                         3.8,
-                        310.0
+                        310.0,
+                        0.833
                 ),
                 new StravaAtividadeDTO(
                         "mock-act-6",
@@ -959,7 +1026,8 @@ public class StravaService {
                         null,
                         14.3,
                         17.0,
-                        290.0
+                        290.0,
+                        3.968
                 )
         );
 
@@ -1021,6 +1089,7 @@ public class StravaService {
 
         integracaoStravaRepository.save(integracao);
         notificacaoService.resolverStravaExpirado(usuario);
+        limparCacheDoAluno(aluno.getId());
 
         return new StravaStatusResponseDTO(true, false, atletaId, nomeAtleta, ehMock);
     }
@@ -1176,6 +1245,59 @@ public class StravaService {
         }
         requiresNewTxTemplate.executeWithoutResult(status -> action.run());
     }
+
+    /**
+     * M3: limite de chamadas reais ao Strava por aluno em janela deslizante (aluno e personal compartilham a cota do aluno).
+     */
+    private void registrarChamadaStrava(UUID alunoId) {
+        if (alunoId == null) {
+            return;
+        }
+        Instant agora = Instant.now(clock);
+        Deque<Instant> janela = chamadasPorAluno.computeIfAbsent(alunoId, k -> new ArrayDeque<>());
+        synchronized (janela) {
+            Instant inicioJanela = agora.minus(JANELA_LIMITE_POR_ALUNO);
+            while (!janela.isEmpty() && !janela.peekFirst().isAfter(inicioJanela)) {
+                janela.pollFirst();
+            }
+            if (janela.size() >= LIMITE_CHAMADAS_POR_ALUNO) {
+                log.warn("Limite de consultas ao Strava por aluno atingido: aluno id={}", alunoId);
+                throw new StravaRateLimitException(MSG_LIMITE_POR_ALUNO);
+            }
+            janela.addLast(agora);
+        }
+    }
+
+    private <T> T lerCache(ConcurrentHashMap<String, EntradaCache<T>> cache, String chave) {
+        EntradaCache<T> entrada = cache.get(chave);
+        if (entrada == null) {
+            return null;
+        }
+        if (!entrada.expiraEm().isAfter(Instant.now(clock))) {
+            cache.remove(chave, entrada);
+            return null;
+        }
+        return entrada.valor();
+    }
+
+    private <T> void gravarCache(ConcurrentHashMap<String, EntradaCache<T>> cache, String chave, T valor, Duration ttl) {
+        Instant agora = Instant.now(clock);
+        if (cache.size() >= TAMANHO_PARA_LIMPEZA_CACHE) {
+            cache.values().removeIf(e -> !e.expiraEm().isAfter(agora));
+        }
+        cache.put(chave, new EntradaCache<>(valor, agora.plus(ttl)));
+    }
+
+    private void limparCacheDoAluno(UUID alunoId) {
+        if (alunoId == null) {
+            return;
+        }
+        String prefixo = alunoId + ":";
+        cacheDetalhe.keySet().removeIf(k -> k.startsWith(prefixo));
+        cacheListagem.keySet().removeIf(k -> k.startsWith(prefixo));
+    }
+
+    private record EntradaCache<T>(T valor, Instant expiraEm) {}
 
     private record ContextoIntegracao(UUID alunoId, Usuario alunoUsuario, IntegracaoStrava integracao) {}
 

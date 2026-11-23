@@ -60,4 +60,11 @@ class FormatadorTempoTest {
         assertThat(FormatadorTempo.parseTempoParaSegundos("100:00:00")).isEmpty();
         assertThat(FormatadorTempo.parseTempoParaSegundos("abc")).isEmpty();
     }
+
+    @Test
+    @DisplayName("B6: minutos com mais de 6 dígitos são rejeitados em vez de estourar o int")
+    void parseTempoParaSegundos_minutosEnormesNaoEstouram() {
+        assertThat(FormatadorTempo.parseTempoParaSegundos("999999:59")).contains(999999 * 60 + 59);
+        assertThat(FormatadorTempo.parseTempoParaSegundos("12345678901:00")).isEmpty();
+    }
 }

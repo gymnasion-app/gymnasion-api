@@ -547,12 +547,15 @@ class StravaServiceTest {
         assertThat(natacao.esporte()).isEqualTo("Natação");
         assertThat(natacao.ritmoMedio()).isEqualTo("02:00");
         assertThat(natacao.frequenciaCardiacaMedia()).isNull();
+        // M1: velocidade bruta (m/s) permite converter o ritmo para a unidade da métrica no front
+        assertThat(natacao.velocidadeMediaMs()).isEqualTo(0.833);
 
         StravaAtividadeDTO bike = atividades.get(2);
         assertThat(bike.tipo()).isEqualTo("MountainBikeRide");
         assertThat(bike.esporte()).isEqualTo("Ciclismo");
         assertThat(bike.ritmoMedio()).isNull();
         assertThat(bike.velocidadeMediaKmh()).isEqualTo(30.0);
+        assertThat(bike.velocidadeMediaMs()).isEqualTo(8.333);
     }
 
     @Test
@@ -865,5 +868,91 @@ class StravaServiceTest {
         assertThat(defCaptor.getAllValues()).anyMatch(def ->
                 def.getPropagationBehavior() == TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         verify(txManager, atLeast(3)).commit(any());
+    }
+
+    private static final String DETALHE_URL = "https://www.strava.com/api/v3/activities/";
+
+    private String detalheJson(long id, long atletaId) {
+        return """
+                {"id":%d,"name":"Treino","type":"Run","sport_type":"Run","athlete":{"id":%d},
+                 "start_date":"2026-10-21T10:00:00Z","start_date_local":"2026-10-21T07:00:00Z","utc_offset":-10800.0,
+                 "distance":5000.0,"moving_time":1500,"calories":300.0}
+                """.formatted(id, atletaId);
+    }
+
+    @Test
+    @DisplayName("M3: id de atividade fora do formato numérico é rejeitado sem chamar o Strava")
+    void obterDetalhe_idNaoNumerico_rejeitadoSemChamarStrava() {
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracaoReal(agora().plusDays(1))));
+
+        for (String invalido : List.of("..", "abc", "12/34", "1".repeat(21))) {
+            assertThatThrownBy(() -> stravaService.obterDetalheAtividade(usuarioAluno, invalido))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessage("Identificador de atividade do Strava inválido.");
+        }
+        stravaApi.verify();
+    }
+
+    @Test
+    @DisplayName("M3: atividade de outro atleta é tratada como não encontrada")
+    void obterDetalhe_atividadeDeOutroAtleta_naoEncontrada() {
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracaoReal(agora().plusDays(1))));
+        stravaApi.expect(requestTo(DETALHE_URL + "555"))
+                .andRespond(withSuccess(detalheJson(555, 99999L), MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> stravaService.obterDetalheAtividade(usuarioAluno, "555"))
+                .isInstanceOf(NotFoundException.class)
+                .hasMessage("Atividade do Strava não encontrada.");
+        stravaApi.verify();
+    }
+
+    @Test
+    @DisplayName("M3: segunda consulta do mesmo detalhe usa o cache e não chama o Strava de novo")
+    void obterDetalhe_segundaChamadaUsaCache() {
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracaoReal(agora().plusDays(1))));
+        stravaApi.expect(org.springframework.test.web.client.ExpectedCount.once(), requestTo(DETALHE_URL + "777"))
+                .andRespond(withSuccess(detalheJson(777, 12345678L), MediaType.APPLICATION_JSON));
+
+        StravaAtividadeDTO primeira = stravaService.obterDetalheAtividade(usuarioAluno, "777");
+        StravaAtividadeDTO segunda = stravaService.obterDetalheAtividade(usuarioAluno, "777");
+
+        stravaApi.verify();
+        assertThat(segunda).isEqualTo(primeira);
+        assertThat(segunda.calorias()).isEqualTo(300.0);
+    }
+
+    @Test
+    @DisplayName("M3: acima de 20 consultas reais em 15 minutos o aluno recebe limite (429) sem chamar o Strava")
+    void limitePorAluno_retornaRateLimit() {
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracaoReal(agora().plusDays(1))));
+        stravaApi.expect(org.springframework.test.web.client.ExpectedCount.times(20), requestTo(containsString(ATIVIDADES_URL)))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON));
+
+        // Limites distintos geram chaves de cache distintas, forçando chamadas reais
+        for (int limite = 1; limite <= 20; limite++) {
+            stravaService.listarAtividadesRecentes(usuarioAluno, limite);
+        }
+        assertThatThrownBy(() -> stravaService.listarAtividadesRecentes(usuarioAluno, 21))
+                .isInstanceOf(StravaRateLimitException.class)
+                .hasMessageContaining("Muitas consultas ao Strava em pouco tempo");
+        stravaApi.verify();
+    }
+
+    @Test
+    @DisplayName("B5: HTTP 429 na renovação do token lança StravaRateLimitException sem pedir reconexão")
+    void renovacao429_lancaRateLimitSemReconexao() {
+        IntegracaoStrava integracao = integracaoReal(agora().minusHours(1));
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracao));
+        stravaApi.expect(requestTo(TOKEN_URL)).andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS));
+
+        assertThatThrownBy(() -> stravaService.listarAtividadesRecentes(usuarioAluno, 10))
+                .isInstanceOf(StravaRateLimitException.class);
+        assertThat(integracao.isReconexaoPendente()).isFalse();
+        verifyNoInteractions(notificacaoService);
     }
 }

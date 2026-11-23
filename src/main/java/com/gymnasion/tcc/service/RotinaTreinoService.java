@@ -66,6 +66,27 @@ public class RotinaTreinoService {
     }
     private final AuditoriaDesempenhoRepository auditoriaDesempenhoRepository;
     private final TurmaRepository turmaRepository;
+    private final IntegracaoStravaRepository integracaoStravaRepository;
+
+    private static final java.util.regex.Pattern ID_ATIVIDADE_STRAVA = java.util.regex.Pattern.compile("^\\d{1,20}$");
+    private static final java.util.regex.Pattern ID_ATIVIDADE_STRAVA_MOCK = java.util.regex.Pattern.compile("^mock-act-\\d{1,3}$");
+
+    /**
+     * US-14: o vínculo com uma atividade do Strava só é aceito se o aluno tiver integração conectada
+     * e o identificador tiver o formato do Strava (ou do modo simulado, quando a integração for mock).
+     */
+    private void validarStravaAtividadeId(Aluno aluno, String stravaAtividadeId) {
+        if (stravaAtividadeId == null) {
+            return;
+        }
+        IntegracaoStrava integracao = integracaoStravaRepository.findByAluno(aluno)
+                .orElseThrow(() -> new BusinessException("Conta Strava não conectada. Conecte sua conta do Strava nas configurações."));
+        boolean mock = integracao.getAccessToken() != null && integracao.getAccessToken().startsWith("mock");
+        java.util.regex.Pattern formato = mock ? ID_ATIVIDADE_STRAVA_MOCK : ID_ATIVIDADE_STRAVA;
+        if (!formato.matcher(stravaAtividadeId).matches()) {
+            throw new BusinessException("Identificador de atividade do Strava inválido.");
+        }
+    }
 
     @Transactional
     public RotinaTreinoResponseDTO criarRotinaTreino(Usuario usuario, CriarRotinaTreinoRequestDTO dto) {
@@ -970,6 +991,13 @@ public class RotinaTreinoService {
         }
         List<AuditoriaDesempenho> auditorias = new ArrayList<>();
 
+        // US-14: a inclusão de pendentes não altera o vínculo com o Strava; nos demais casos o id precisa ser válido
+        if (somenteInclusaoPendentes) {
+            stravaAtividadeIdNormalizado = null;
+        } else {
+            validarStravaAtividadeId(alunoResponsavel, stravaAtividadeIdNormalizado);
+        }
+
         if (!somenteInclusaoPendentes) {
             // US-10 Cenário 4: Data diferente da planejada - registra data efetiva e preserva a planejada
             sessao.setDataReal(dto.dataReal());
@@ -1003,7 +1031,10 @@ public class RotinaTreinoService {
             if (dto.nivelCansaco() != null) {
                 desempenho.setNivelCansaco(dto.nivelCansaco());
             }
-            desempenho.setStravaAtividadeId(stravaAtividadeIdNormalizado);
+            // B2: só substitui o vínculo quando um novo id é informado; nunca apaga o existente
+            if (stravaAtividadeIdNormalizado != null) {
+                desempenho.setStravaAtividadeId(stravaAtividadeIdNormalizado);
+            }
         }
 
         Set<Metrica> metricasDaSessao = sessao.getMetricas() != null ? sessao.getMetricas() : Set.of();
@@ -1023,11 +1054,8 @@ public class RotinaTreinoService {
                 throw new BusinessException("A métrica '" + metrica.getTitulo() + "' é de preenchimento exclusivo do aluno.");
             }
             if (!isPersonal && quemPreenche == ResponsavelPreenchimento.PERSONAL) {
-                // Permite gravação pelo aluno exclusivamente quando vinculada ao Strava e acompanhada de atividade Strava
-                boolean vinculadoStrava = metrica.getCampoStrava() != null && metrica.getCampoStrava() != CampoStrava.NENHUM;
-                if (!vinculadoStrava || stravaAtividadeIdNormalizado == null) {
-                    throw new BusinessException("A métrica '" + metrica.getTitulo() + "' é de preenchimento exclusivo do personal trainer.");
-                }
+                // US-18 C5: métrica exclusiva do personal nunca é preenchida pelo aluno, mesmo com vínculo ao Strava
+                throw new BusinessException("A métrica '" + metrica.getTitulo() + "' é de preenchimento exclusivo do personal trainer.");
             }
 
             // US-22 Cenário 9 / US-18 (RN-015): Valida e normaliza o valor de acordo com o tipo/unidade da métrica
