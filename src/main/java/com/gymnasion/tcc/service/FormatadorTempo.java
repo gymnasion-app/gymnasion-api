@@ -64,7 +64,8 @@ public final class FormatadorTempo {
         String[] partes = trimmed.split(":", -1);
         try {
             if (partes.length == 2) {
-                if (!partes[0].matches("\\d+") || !partes[1].matches("[0-5]\\d")) {
+                // Até 6 dígitos de minutos: evita estouro de int em valores legados absurdos (B6)
+                if (!partes[0].matches("\\d{1,6}") || !partes[1].matches("[0-5]\\d")) {
                     return Optional.empty();
                 }
                 int mins = Integer.parseInt(partes[0]);

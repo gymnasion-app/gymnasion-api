@@ -713,7 +713,7 @@ class MetricaServiceTest {
         assertThatThrownBy(() -> metricaService.atualizarMetrica(metricaId, usuarioLogado, new AtualizarMetricaRequestDTO(
                 "Distância", TipoMetrica.NUMERICO, false, ResponsavelPreenchimento.AMBOS, CampoStrava.DISTANCIA_KM, "m")))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("Métrica com histórico não permite alterar tipo ou unidade.");
+                .hasMessage("Não é possível alterar a unidade de uma métrica com histórico de registros. Crie uma nova métrica.");
 
         MetricaResponseDTO atualizada = metricaService.atualizarMetrica(metricaId, usuarioLogado, new AtualizarMetricaRequestDTO(
                 "Distância", TipoMetrica.NUMERICO, false, ResponsavelPreenchimento.AMBOS, CampoStrava.NENHUM, "km"));
@@ -746,5 +746,21 @@ class MetricaServiceTest {
                         org.assertj.core.groups.Tuple.tuple("M2", true),
                         org.assertj.core.groups.Tuple.tuple("M3", false)
                 );
+    }
+
+    @Test
+    @DisplayName("B3: métrica só com auditoria também aparece com possuiHistorico na listagem")
+    void listarMetricasPorModalidade_consideraAuditoriaComoHistorico() {
+        Metrica auditada = Metrica.builder().id(UUID.randomUUID()).titulo("Auditada").tipo(TipoMetrica.NUMERICO)
+                .obrigatoria(false).quemPreenche(ResponsavelPreenchimento.PERSONAL).modalidade(modalidade).personalTrainer(personalTrainer).ativo(true).build();
+
+        when(personalTrainerRepository.getByUsuario(usuarioLogado)).thenReturn(Optional.of(personalTrainer));
+        when(metricaRepository.findByPersonalTrainerIdAndModalidadeId(personalTrainer.getId(), 1L))
+                .thenReturn(List.of(auditada));
+        when(auditoriaDesempenhoRepository.findMetricaIdsWithAuditoria(any()))
+                .thenReturn(java.util.Set.of(auditada.getId()));
+
+        List<MetricaResponseDTO> lista = metricaService.listarMetricasPorModalidade(usuarioLogado, 1L);
+        assertThat(lista).singleElement().extracting(MetricaResponseDTO::possuiHistorico).isEqualTo(true);
     }
 }

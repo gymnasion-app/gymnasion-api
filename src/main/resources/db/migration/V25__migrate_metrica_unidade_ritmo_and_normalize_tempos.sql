@@ -24,7 +24,24 @@ WHERE mod.id = m.modalidade_id
       OR LOWER(TRANSLATE(mod.nome, 'áàâãäéèêëíìîïóòôõöúùûüçÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇ', 'aaaaaeeeeiiiiooooouuuucaaaaaeeeeiiiiooooouuuuc')) LIKE '%spinning%'
   );
 
--- Passo 2: Reclassificar demais metricas com RITMO_MEDIO para TEMPO com unidade de ritmo por modalidade
+-- Passo 2a: RN-017 / US-19 C2 - metricas com historico nao mudam de tipo.
+-- As que ainda nao sao TEMPO perdem o vinculo RITMO_MEDIO e preservam tipo e valores;
+-- o personal pode criar uma nova metrica TEMPO de ritmo.
+UPDATE metrica m
+SET campo_strava = NULL
+WHERE m.campo_strava = 'RITMO_MEDIO'
+  AND m.tipo IS DISTINCT FROM 'TEMPO'
+  AND (
+      EXISTS (SELECT 1 FROM registro_metrica rm WHERE rm.metrica_id = m.id)
+      OR EXISTS (SELECT 1 FROM auditoria_desempenho ad WHERE ad.metrica_id = m.id)
+      OR EXISTS (
+          SELECT 1 FROM sessao_treino_metrica stm
+          JOIN sessao_treino st ON st.id = stm.sessao_treino_id
+          WHERE stm.metrica_id = m.id AND st.status = 'CONCLUIDA'
+      )
+  );
+
+-- Passo 2b: Reclassificar as demais metricas RITMO_MEDIO (sem historico) para TEMPO com unidade de ritmo por modalidade
 UPDATE metrica m
 SET tipo = 'TEMPO',
     unidade = CASE
@@ -136,35 +153,31 @@ WHERE m.id = rm.metrica_id
   AND m.tipo = 'NUMERICO'
   AND TRIM(rm.valor) ~ '^-?\d+,\d+$';
 
--- 6b. Extracao de ritmo valido em registros ligados a RITMO_MEDIO (preserva textos incompativeis como "24,7 km/h")
+-- 6b. Extracao de ritmo valido em registros ligados a RITMO_MEDIO (apenas metricas TEMPO; preserva textos incompativeis)
+--     Mesmo limite do ValidadorValorMetrica: ate 99 minutos (\d{1,2}:[0-5]\d)
 UPDATE registro_metrica rm
-SET valor = CASE
-    WHEN LENGTH(SPLIT_PART((regexp_match(TRIM(rm.valor), '^(\d{1,3}:[0-5]\d)(?:\s*(?:min/km|min/100m|min/500m|/km))?$'))[1], ':', 1)) = 1
-        THEN '0' || (regexp_match(TRIM(rm.valor), '^(\d{1,3}:[0-5]\d)(?:\s*(?:min/km|min/100m|min/500m|/km))?$'))[1]
-    ELSE (regexp_match(TRIM(rm.valor), '^(\d{1,3}:[0-5]\d)(?:\s*(?:min/km|min/100m|min/500m|/km))?$'))[1]
-END
+SET valor = LPAD((regexp_match(TRIM(rm.valor), '^(\d{1,2}):([0-5]\d)(?:\s*(?:min/km|min/100m|min/500m|/km))?$'))[1], 2, '0')
+    || ':' || (regexp_match(TRIM(rm.valor), '^(\d{1,2}):([0-5]\d)(?:\s*(?:min/km|min/100m|min/500m|/km))?$'))[2]
 FROM metrica m
 WHERE m.id = rm.metrica_id
+  AND m.tipo = 'TEMPO'
   AND m.campo_strava = 'RITMO_MEDIO'
-  AND TRIM(rm.valor) ~ '^\d{1,3}:[0-5]\d(?:\s*(?:min/km|min/100m|min/500m|/km))?$'
-  AND rm.valor IS DISTINCT FROM CASE
-      WHEN LENGTH(SPLIT_PART((regexp_match(TRIM(rm.valor), '^(\d{1,3}:[0-5]\d)(?:\s*(?:min/km|min/100m|min/500m|/km))?$'))[1], ':', 1)) = 1
-          THEN '0' || (regexp_match(TRIM(rm.valor), '^(\d{1,3}:[0-5]\d)(?:\s*(?:min/km|min/100m|min/500m|/km))?$'))[1]
-      ELSE (regexp_match(TRIM(rm.valor), '^(\d{1,3}:[0-5]\d)(?:\s*(?:min/km|min/100m|min/500m|/km))?$'))[1]
-  END;
+  AND TRIM(rm.valor) ~ '^\d{1,2}:[0-5]\d(?:\s*(?:min/km|min/100m|min/500m|/km))?$'
+  AND rm.valor !~ '^\d{2}:[0-5]\d$';
 
 -- 6c. Cronometros TEMPO em 2 segmentos com mm >= 60 -> hh:mm:ss (protege ritmos lentos, hh:mm:ss e segundos >= 60)
+--     Casts protegidos por CASE (o PostgreSQL nao garante a ordem de avaliacao do WHERE). So converte ate 5999 min,
+--     limite que cabe em hh:mm:ss com hh <= 99 (formato aceito pelo ValidadorValorMetrica); acima disso o valor fica intacto.
 UPDATE registro_metrica rm
-SET valor = CASE
-    WHEN ((SPLIT_PART(TRIM(rm.valor), ':', 1))::int / 60) < 10
-        THEN '0' || ((SPLIT_PART(TRIM(rm.valor), ':', 1))::int / 60)::text
-    ELSE ((SPLIT_PART(TRIM(rm.valor), ':', 1))::int / 60)::text
-END
-    || ':' || LPAD((((SPLIT_PART(TRIM(rm.valor), ':', 1))::int % 60))::text, 2, '0')
+SET valor = LPAD(((SPLIT_PART(TRIM(rm.valor), ':', 1))::int / 60)::text, 2, '0')
+    || ':' || LPAD(((SPLIT_PART(TRIM(rm.valor), ':', 1))::int % 60)::text, 2, '0')
     || ':' || SPLIT_PART(TRIM(rm.valor), ':', 2)
 FROM metrica m
 WHERE m.id = rm.metrica_id
   AND m.tipo = 'TEMPO'
   AND m.unidade IN ('mm:ss', 'hh:mm:ss')
-  AND TRIM(rm.valor) ~ '^\d{2,}:[0-5]\d$'
-  AND (SPLIT_PART(TRIM(rm.valor), ':', 1))::int >= 60;
+  AND CASE
+          WHEN TRIM(rm.valor) ~ '^\d{2,4}:[0-5]\d$'
+              THEN (SPLIT_PART(TRIM(rm.valor), ':', 1))::int BETWEEN 60 AND 5999
+          ELSE false
+      END;
