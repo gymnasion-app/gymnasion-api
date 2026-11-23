@@ -23,6 +23,8 @@ import java.text.Normalizer;
 import java.text.NumberFormat;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.*;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -49,11 +51,9 @@ public class RelatorioPdfGenerator {
     private static final Color BACKGROUND = new Color(0xF6F7FB);
     private static final Color SUCCESS_50 = new Color(0xECFDF3);
     private static final Color SUCCESS_700 = new Color(0x067647);
-    private static final Color DANGER = new Color(0xF04438);
     private static final Color DANGER_50 = new Color(0xFEF3F2);
     private static final Color DANGER_700 = new Color(0xB42318);
     private static final Color INFO = new Color(0x2E90FA);
-    private static final Color SPORT_ACADEMIA = new Color(0x7A5AF8);
 
     // Degradê do símbolo (Gymnasion_web/public/design-system/imgMark.svg)
     private static final Color LOGO_INICIO = new Color(0xFF8A3D);
@@ -65,7 +65,10 @@ public class RelatorioPdfGenerator {
             + "C28.7536 24.3314 29.5081 22.1983 29.5 20H26L24.4 17.2L22 22.8L20.4 20H18.5";
 
     // Cores das séries na tela de evolução (StudentEvolution.tsx): azul, laranja e vermelho em rodízio; RPE em roxo
-    private static final Color[] CORES_SERIES = {INFO, PRIMARY_500, DANGER};
+    // Mesmas cores dos gráficos do front: métricas em azul, RPE em laranja (validadas para daltonismo)
+    private static final Color COR_SERIE_METRICA = INFO;
+    private static final Color COR_SERIE_RPE = PRIMARY_500;
+    private static final Color GRADE = new Color(0xE2E8F0);
 
     // --color-sport-* e --color-sport-*-50; modalidades sem cor definida usam o estilo neutro
     private static final Map<String, Color[]> CORES_MODALIDADES = Map.of(
@@ -79,6 +82,7 @@ public class RelatorioPdfGenerator {
 
     private static final DateTimeFormatter FORMATO_DATA = DateTimeFormatter.ofPattern("dd/MM/yyyy");
     private static final DateTimeFormatter FORMATO_HORA = DateTimeFormatter.ofPattern("HH:mm");
+    private static final DateTimeFormatter FORMATO_DIA_MES = DateTimeFormatter.ofPattern("dd/MM");
     private static final Locale LOCALE_PT_BR = Locale.of("pt", "BR");
 
     private static final float MARGEM = 36;
@@ -86,8 +90,8 @@ public class RelatorioPdfGenerator {
     private static final float RAIO_CARD = 12;
     private static final float ESPACO_ENTRE_CARDS = 5;
     private static final float PADDING_CARD = 12;
-    // Proporção do gráfico da tela de evolução (viewBox 500 x 165), com mais altura para a impressão
-    private static final float PROPORCAO_GRAFICO = 0.42f;
+    // Altura do gráfico em relação à largura (inclui legenda, eixos e rótulos)
+    private static final float PROPORCAO_GRAFICO = 0.66f;
     // Acima deste número de pontos os marcadores poluem o gráfico; exibe apenas a linha
     private static final int LIMITE_PONTOS_COM_MARCADOR = 60;
     // Máximo de métricas por tabela de valores, para manter as colunas legíveis na largura da página
@@ -228,12 +232,11 @@ public class RelatorioPdfGenerator {
         float larguraGrafico = larguraConteudo / 2 - 2 * (ESPACO_ENTRE_CARDS + PADDING_CARD);
 
         List<PdfPCell> cards = new ArrayList<>();
-        int indiceCor = 0;
         if (conteudos.contains(ConteudoRelatorio.GRAFICOS)) {
             for (SerieMetricaDashboardDTO metrica : secao.metricas()) {
                 // Métricas de texto não possuem gráfico, assim como na tela de evolução
                 if (metrica.tipo() == TipoMetrica.TEXTO) continue;
-                cards.add(criarCardMetrica(writer, metrica, CORES_SERIES[indiceCor++ % CORES_SERIES.length], larguraGrafico));
+                cards.add(criarCardMetrica(writer, metrica, COR_SERIE_METRICA, larguraGrafico));
             }
         }
         if (conteudos.contains(ConteudoRelatorio.RPE)) {
@@ -267,7 +270,11 @@ public class RelatorioPdfGenerator {
         PdfPCell card = criarCelulaCard();
         card.addElement(criarCabecalhoCard(metrica.titulo(), rotuloCard(metrica), variacao,
                 metrica.tendencia() != null ? metrica.tendencia().indicadorVisual() : null, metrica.descontinuada()));
-        adicionarConteudoGrafico(writer, card, datas, valores, metrica.tipo(), unidadeMedia(metrica), cor, larguraGrafico);
+        String unidadeEixo = unidadeEixo(metrica);
+        String rotuloSerie = removerSufixoUnidade(metrica.titulo(), unidadeEixo)
+                + (unidadeEixo != null ? " (" + unidadeEixo + ")" : "");
+        adicionarConteudoGrafico(writer, card, datas, valores, metrica.tipo(), unidadeMedia(metrica),
+                rotuloSerie, unidadeEixo, null, cor, larguraGrafico);
         return card;
     }
 
@@ -280,7 +287,8 @@ public class RelatorioPdfGenerator {
 
         PdfPCell card = criarCelulaCard();
         card.addElement(criarCabecalhoCard("Nível de esforço (RPE)", "Escala de Borg CR-10", calcularVariacao(valores), null, false));
-        adicionarConteudoGrafico(writer, card, datas, valores, null, "média", SPORT_ACADEMIA, larguraGrafico);
+        adicionarConteudoGrafico(writer, card, datas, valores, null, "média", "RPE da sessão", "RPE",
+                new double[]{0, 10}, COR_SERIE_RPE, larguraGrafico);
         return card;
     }
 
@@ -324,7 +332,8 @@ public class RelatorioPdfGenerator {
     }
 
     private void adicionarConteudoGrafico(PdfWriter writer, PdfPCell card, List<LocalDate> datas, List<Double> valores,
-                                          TipoMetrica tipo, String unidade, Color cor, float larguraGrafico) {
+                                          TipoMetrica tipo, String unidade, String rotuloSerie, String unidadeEixo,
+                                          double[] dominioFixo, Color cor, float larguraGrafico) {
         if (valores.isEmpty()) {
             Paragraph vazio = new Paragraph("Sem registros para esta métrica no período.", fonte(fonteRegular, 8.5f, INK_500));
             vazio.setAlignment(Element.ALIGN_CENTER);
@@ -343,47 +352,106 @@ public class RelatorioPdfGenerator {
         valor.add(new Chunk("  " + unidade, fonte(fonteRegular, 8.5f, INK_500)));
         card.addElement(valor);
 
-        Image grafico = criarGrafico(writer, datas, valores, cor, larguraGrafico);
+        Image grafico = criarGrafico(writer, datas, valores, tipo, rotuloSerie, unidadeEixo, dominioFixo, cor, larguraGrafico);
         grafico.setSpacingBefore(8);
         card.addElement(grafico);
+
+        // O eixo mostra dd/MM; a legenda inferior traz o intervalo completo e a quantidade de registros
+        LocalDate primeira = datas.get(0), ultima = datas.get(datas.size() - 1);
+        String intervalo = primeira.equals(ultima)
+                ? primeira.format(FORMATO_DATA)
+                : primeira.format(FORMATO_DATA) + " – " + ultima.format(FORMATO_DATA);
+        Paragraph legendaInferior = new Paragraph(intervalo + " · " + valores.size()
+                + (valores.size() == 1 ? " registro" : " registros"), fonte(fonteRegular, 7, INK_500));
+        legendaInferior.setSpacingBefore(4);
+        card.addElement(legendaInferior);
     }
 
-    // Reproduz o gráfico do EvolutionCard: grade tracejada, área em degradê, linha e marcadores, datas inicial e final
-    private Image criarGrafico(PdfWriter writer, List<LocalDate> datas, List<Double> valores, Color cor, float largura) {
+    // Mesmo desenho do LineChart do front: legenda, eixos com valores, grade sólida, área, linha, pontos,
+    // média do período tracejada e rótulo do último valor
+    private Image criarGrafico(PdfWriter writer, List<LocalDate> datas, List<Double> valores, TipoMetrica tipo,
+                               String rotuloSerie, String unidadeEixo, double[] dominioFixo, Color cor, float largura) {
         float altura = largura * PROPORCAO_GRAFICO;
         PdfTemplate t = writer.getDirectContent().createTemplate(largura, altura);
+        double media = valores.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+        boolean mostrarMedia = valores.size() > 1;
 
-        float esquerda = 4, direita = largura - 4;
-        float base = 14, topo = altura - 4;
-        float inicioPlot = base + 4;
+        // Legenda (uma ou duas linhas, conforme a largura disponível)
+        float tamLegenda = 6.8f;
+        float yLegenda = altura - 7;
+        desenharAmostraSerie(t, 0, yLegenda + 2.4f, cor);
+        escreverTexto(t, fonteRegular, tamLegenda, INK_700, rotuloSerie, 19, yLegenda, Element.ALIGN_LEFT);
+        float fimSerie = 19 + fonteRegular.getWidthPoint(rotuloSerie, tamLegenda);
+        float yUltimaLegenda = yLegenda;
+        if (mostrarMedia) {
+            String textoMedia = "Média do período: ";
+            String valorMedia = formatarValor(media, tipo);
+            float larguraMedia = 19 + fonteRegular.getWidthPoint(textoMedia, tamLegenda) + fonteBold.getWidthPoint(valorMedia, tamLegenda);
+            float xMedia = fimSerie + 12;
+            float yMedia = yLegenda;
+            if (xMedia + larguraMedia > largura) {
+                xMedia = 0;
+                yMedia = yLegenda - 10;
+                yUltimaLegenda = yMedia;
+            }
+            desenharAmostraMedia(t, xMedia, yMedia + 2.4f);
+            escreverTexto(t, fonteRegular, tamLegenda, INK_700, textoMedia, xMedia + 19, yMedia, Element.ALIGN_LEFT);
+            escreverTexto(t, fonteBold, tamLegenda, INK_900, valorMedia,
+                    xMedia + 19 + fonteRegular.getWidthPoint(textoMedia, tamLegenda), yMedia, Element.ALIGN_LEFT);
+        }
 
+        // Escala Y com valores redondos
+        double minimo = Collections.min(valores), maximo = Collections.max(valores);
+        List<Double> ticks = dominioFixo != null
+                ? ticksRedondos(dominioFixo[0], dominioFixo[1], 6)
+                : ticksRedondos(minimo, maximo, 5);
+        double yMin = dominioFixo != null ? dominioFixo[0] : ticks.get(0);
+        double yMax = dominioFixo != null ? dominioFixo[1] : ticks.get(ticks.size() - 1);
+
+        float tamTick = 6.3f;
+        float larguraTick = 0;
+        for (double tick : ticks) {
+            larguraTick = Math.max(larguraTick, fonteRegular.getWidthPoint(formatarValor(tick, tipo), tamTick));
+        }
+        float esquerda = larguraTick + 6;
+        float direita = largura - 6;
+        float base = 15;
+        float topo = yUltimaLegenda - (unidadeEixo != null ? 14 : 8);
+
+        if (unidadeEixo != null) {
+            // Alinhada à borda esquerda: unidades mais largas que os valores do eixo (ex.: "min/km") não são cortadas
+            escreverTexto(t, fonteSemiBold, 6.3f, INK_700, unidadeEixo, 0, topo + 6, Element.ALIGN_LEFT);
+        }
+
+        // Grade horizontal sólida e valores do eixo Y
         t.saveState();
-        t.setColorStroke(BORDER);
-        t.setLineWidth(0.75f);
-        t.setLineDash(2, 3.5f, 0);
-        for (int i = 0; i < 4; i++) {
-            float y = inicioPlot + (topo - inicioPlot) * i / 3;
+        t.setColorStroke(GRADE);
+        t.setLineWidth(0.5f);
+        for (double tick : ticks) {
+            float y = escalarY(tick, yMin, yMax, base, topo);
             t.moveTo(esquerda, y);
             t.lineTo(direita, y);
         }
         t.stroke();
         t.restoreState();
+        for (double tick : ticks) {
+            escreverTexto(t, fonteRegular, tamTick, INK_500, formatarValor(tick, tipo), esquerda - 4,
+                    escalarY(tick, yMin, yMax, base, topo) - 2.2f, Element.ALIGN_RIGHT);
+        }
 
-        double menor = Collections.min(valores), maior = Collections.max(valores);
+        // Posições dos pontos (eixo X temporal)
         long inicio = datas.get(0).toEpochDay(), fim = datas.get(datas.size() - 1).toEpochDay();
         float[] xs = new float[valores.size()];
         float[] ys = new float[valores.size()];
         for (int i = 0; i < valores.size(); i++) {
             xs[i] = fim == inicio
                     ? (esquerda + direita) / 2
-                    : esquerda + 4 + (float) (datas.get(i).toEpochDay() - inicio) / (fim - inicio) * (direita - esquerda - 8);
-            ys[i] = maior == menor
-                    ? (inicioPlot + topo) / 2
-                    : inicioPlot + 2 + (float) ((valores.get(i) - menor) / (maior - menor)) * (topo - inicioPlot - 4);
+                    : esquerda + (float) (datas.get(i).toEpochDay() - inicio) / (fim - inicio) * (direita - esquerda);
+            ys[i] = escalarY(valores.get(i), yMin, yMax, base, topo);
         }
 
         if (valores.size() > 1) {
-            // Área sob a linha: a cor da série com 16% de opacidade sobre o fundo branco, até transparente
+            // Área sob a linha: a cor da série com 14% de opacidade sobre o fundo branco, até quase transparente
             t.saveState();
             t.moveTo(xs[0], base);
             for (int i = 0; i < xs.length; i++) {
@@ -393,12 +461,54 @@ public class RelatorioPdfGenerator {
             t.closePath();
             t.clip();
             t.newPath();
-            t.paintShading(PdfShading.simpleAxial(writer, 0, topo, 0, base, misturarComBranco(cor, 0.16f), Color.WHITE));
+            t.paintShading(PdfShading.simpleAxial(writer, 0, topo, 0, base, misturarComBranco(cor, 0.14f), misturarComBranco(cor, 0.02f)));
             t.restoreState();
+        }
 
+        // Eixos
+        t.saveState();
+        t.setColorStroke(INK_400);
+        t.setLineWidth(0.6f);
+        t.moveTo(esquerda, topo);
+        t.lineTo(esquerda, base);
+        t.lineTo(direita, base);
+        t.stroke();
+        t.restoreState();
+
+        // Datas do eixo X (sem rótulos colados)
+        List<Integer> indicesRotulo = indicesRotulosX(xs, Math.max(2, (int) ((direita - esquerda) / 40)), 32);
+        t.saveState();
+        t.setColorStroke(INK_400);
+        t.setLineWidth(0.6f);
+        for (int i : indicesRotulo) {
+            t.moveTo(xs[i], base);
+            t.lineTo(xs[i], base - 2.5f);
+        }
+        t.stroke();
+        t.restoreState();
+        for (int k = 0; k < indicesRotulo.size(); k++) {
+            int i = indicesRotulo.get(k);
+            int alinhamento = xs[i] - esquerda < 12 ? Element.ALIGN_LEFT
+                    : direita - xs[i] < 12 ? Element.ALIGN_RIGHT : Element.ALIGN_CENTER;
+            escreverTexto(t, fonteRegular, tamTick, INK_500, datas.get(i).format(FORMATO_DIA_MES), xs[i], 4, alinhamento);
+        }
+
+        if (mostrarMedia) {
+            float yMedia = escalarY(media, yMin, yMax, base, topo);
+            t.saveState();
+            t.setColorStroke(INK_500);
+            t.setLineWidth(0.9f);
+            t.setLineDash(3.2f, 2.6f, 0);
+            t.moveTo(esquerda, yMedia);
+            t.lineTo(direita, yMedia);
+            t.stroke();
+            t.restoreState();
+        }
+
+        if (valores.size() > 1) {
             t.saveState();
             t.setColorStroke(cor);
-            t.setLineWidth(1.8f);
+            t.setLineWidth(2f);
             t.setLineJoin(PdfContentByte.LINE_JOIN_ROUND);
             t.setLineCap(PdfContentByte.LINE_CAP_ROUND);
             t.moveTo(xs[0], ys[0]);
@@ -409,24 +519,112 @@ public class RelatorioPdfGenerator {
             t.restoreState();
         }
 
+        int ultimo = xs.length - 1;
         if (valores.size() <= LIMITE_PONTOS_COM_MARCADOR) {
             t.saveState();
-            t.setColorStroke(cor);
-            t.setColorFill(Color.WHITE);
-            t.setLineWidth(1.4f);
+            t.setColorFill(cor);
+            t.setColorStroke(Color.WHITE);
+            t.setLineWidth(1.1f);
             for (int i = 0; i < xs.length; i++) {
-                t.circle(xs[i], ys[i], 2.6f);
+                t.circle(xs[i], ys[i], i == ultimo ? 3.3f : 2.5f);
                 t.fillStroke();
             }
             t.restoreState();
         }
 
-        escreverTexto(t, fonteRegular, 7, INK_400, datas.get(0).format(FORMATO_DATA), esquerda, 2, Element.ALIGN_LEFT);
-        escreverTexto(t, fonteRegular, 7, INK_400, datas.get(datas.size() - 1).format(FORMATO_DATA), direita, 2, Element.ALIGN_RIGHT);
+        // Rótulo do último valor (as demais leituras ficam no eixo e na tabela de valores)
+        String rotuloFinal = formatarValor(valores.get(ultimo), tipo);
+        float larguraRotulo = fonteBold.getWidthPoint(rotuloFinal, 7);
+        int alinhamentoFinal = direita - xs[ultimo] < larguraRotulo / 2 + 2 ? Element.ALIGN_RIGHT : Element.ALIGN_CENTER;
+        float yRotulo = Math.min(ys[ultimo] + 5.5f, topo + 1);
+        escreverTexto(t, fonteBold, 7, INK_900, rotuloFinal, alinhamentoFinal == Element.ALIGN_RIGHT ? xs[ultimo] + 3 : xs[ultimo],
+                yRotulo, alinhamentoFinal);
 
         Image imagem = Image.getInstance(t);
         imagem.setAlignment(Element.ALIGN_CENTER);
         return imagem;
+    }
+
+    private void desenharAmostraSerie(PdfContentByte t, float x, float y, Color cor) {
+        t.saveState();
+        t.setColorStroke(cor);
+        t.setLineWidth(1.8f);
+        t.setLineCap(PdfContentByte.LINE_CAP_ROUND);
+        t.moveTo(x + 1, y);
+        t.lineTo(x + 15, y);
+        t.stroke();
+        t.setColorFill(cor);
+        t.setColorStroke(Color.WHITE);
+        t.setLineWidth(1f);
+        t.circle(x + 8, y, 2.6f);
+        t.fillStroke();
+        t.restoreState();
+    }
+
+    private void desenharAmostraMedia(PdfContentByte t, float x, float y) {
+        t.saveState();
+        t.setColorStroke(INK_500);
+        t.setLineWidth(1.2f);
+        t.setLineDash(3f, 2f, 0);
+        t.moveTo(x + 1, y);
+        t.lineTo(x + 15, y);
+        t.stroke();
+        t.restoreState();
+    }
+
+    private static float escalarY(double valor, double minimo, double maximo, float base, float topo) {
+        double faixa = maximo - minimo;
+        return faixa == 0 ? (base + topo) / 2 : base + (float) ((valor - minimo) / faixa) * (topo - base);
+    }
+
+    /** Valores "redondos" (passos 1, 2 ou 5 × 10^n) que cobrem [minimo, maximo]; mesma regra do front. */
+    static List<Double> ticksRedondos(double minimo, double maximo, int quantidade) {
+        double lo = minimo, hi = maximo;
+        if (lo == hi) {
+            double folga = Math.abs(lo) * 0.1;
+            if (folga == 0) folga = 1;
+            lo -= folga;
+            hi += folga;
+        }
+        double bruto = (hi - lo) / Math.max(1, quantidade - 1);
+        double expoente = Math.pow(10, Math.floor(Math.log10(bruto)));
+        double fracao = bruto / expoente;
+        double passo = (fracao <= 1 ? 1 : fracao <= 2 ? 2 : fracao <= 5 ? 5 : 10) * expoente;
+        double inicio = Math.floor(lo / passo) * passo;
+        double fim = Math.ceil(hi / passo) * passo;
+        // Quantidade calculada antes do laço: nunca entra em loop, mesmo com passo abaixo da precisão do double
+        int quantidadeTicks = (int) Math.min(50, Math.max(1, Math.round((fim - inicio) / passo) + 1));
+        List<Double> ticks = new ArrayList<>();
+        for (int i = 0; i < quantidadeTicks; i++) {
+            ticks.add(BigDecimal.valueOf(inicio + i * passo).setScale(10, RoundingMode.HALF_UP).stripTrailingZeros().doubleValue());
+        }
+        return ticks;
+    }
+
+    /** Até {@code maximo} índices distribuídos (sempre o primeiro e o último), sem rótulos mais próximos que {@code distanciaMinima}. */
+    static List<Integer> indicesRotulosX(float[] xs, int maximo, float distanciaMinima) {
+        int n = xs.length;
+        List<Integer> candidatos = new ArrayList<>();
+        if (n <= maximo) {
+            for (int i = 0; i < n; i++) candidatos.add(i);
+        } else {
+            for (int k = 0; k < maximo; k++) {
+                int i = Math.round((float) k * (n - 1) / (maximo - 1));
+                if (candidatos.isEmpty() || candidatos.get(candidatos.size() - 1) != i) candidatos.add(i);
+            }
+        }
+        List<Integer> mantidos = new ArrayList<>();
+        for (int i : candidatos) {
+            if (mantidos.isEmpty() || xs[i] - xs[mantidos.get(mantidos.size() - 1)] >= distanciaMinima) mantidos.add(i);
+        }
+        int ultimo = n - 1;
+        if (n > 0 && mantidos.get(mantidos.size() - 1) != ultimo) {
+            while (mantidos.size() > 1 && xs[ultimo] - xs[mantidos.get(mantidos.size() - 1)] < distanciaMinima) {
+                mantidos.remove(mantidos.size() - 1);
+            }
+            mantidos.add(ultimo);
+        }
+        return mantidos;
     }
 
     private void adicionarSessoes(Document documento, PdfWriter writer, List<SessaoRelatorioDTO> sessoes, boolean incluirRpe) {
@@ -695,6 +893,27 @@ public class RelatorioPdfGenerator {
         return metrica.descontinuada()
                 ? titulo + " (" + metrica.statusMetrica() + ")"
                 : titulo;
+    }
+
+    private String unidadeEixo(SerieMetricaDashboardDTO metrica) {
+        if (metrica.unidade() != null && !metrica.unidade().isBlank()) {
+            return metrica.unidade().trim();
+        }
+        return switch (metrica.tipo()) {
+            case TEMPO -> "mm:ss";
+            case FREQUENCIA_CARDIACA -> "bpm";
+            default -> null;
+        };
+    }
+
+    private String removerSufixoUnidade(String titulo, String unidade) {
+        if (titulo == null || unidade == null) return titulo;
+        String sufixo = "(" + unidade + ")";
+        String limpo = titulo.trim();
+        if (limpo.toLowerCase(LOCALE_PT_BR).endsWith(sufixo.toLowerCase(LOCALE_PT_BR))) {
+            return limpo.substring(0, limpo.length() - sufixo.length()).trim();
+        }
+        return limpo;
     }
 
     private String unidadeMedia(SerieMetricaDashboardDTO metrica) {
