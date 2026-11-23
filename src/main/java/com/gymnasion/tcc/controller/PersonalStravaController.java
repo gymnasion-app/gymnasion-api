@@ -42,4 +42,13 @@ public class PersonalStravaController {
             @RequestParam(name = "limite", required = false, defaultValue = "10") Integer limite) {
         return ResponseEntity.ok(stravaService.listarAtividadesPorPersonal(alunoId, usuario.getId(), limite));
     }
+
+    @GetMapping("/atividades/{atividadeId}")
+    @Operation(summary = "Obter detalhes de uma atividade do Strava do aluno")
+    public ResponseEntity<StravaAtividadeDTO> obterDetalheAtividade(
+            @PathVariable UUID alunoId,
+            @PathVariable String atividadeId,
+            @AuthenticationPrincipal Usuario usuario) {
+        return ResponseEntity.ok(stravaService.obterDetalheAtividadePorPersonal(alunoId, usuario.getId(), atividadeId));
+    }
 }

@@ -4,9 +4,11 @@ import com.gymnasion.tcc.domain.Desempenho;
 import com.gymnasion.tcc.domain.Metrica;
 import com.gymnasion.tcc.domain.RegistroMetrica;
 import com.gymnasion.tcc.domain.SessaoTreino;
+import com.gymnasion.tcc.domain.enums.CampoStrava;
 import com.gymnasion.tcc.domain.enums.StatusSessaoTreino;
 import com.gymnasion.tcc.domain.enums.TipoMetrica;
 import com.gymnasion.tcc.dto.DashboardEvolucaoResponseDTO.*;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDate;
 import java.util.*;
@@ -16,6 +18,7 @@ import java.util.*;
  * Compartilhada pelos dashboards de evolução (US-15 / US-20 C3) e pelo relatório de performance em PDF (US-16).
  * Atende às regras de negócio RN-015, RN-017 e RN-018.
  */
+@Slf4j
 public final class AgregadorEvolucaoDesempenho {
 
     private AgregadorEvolucaoDesempenho() {
@@ -40,8 +43,8 @@ public final class AgregadorEvolucaoDesempenho {
                 pontosPorMetrica.computeIfAbsent(metrica.getId(), k -> new ArrayList<>());
 
                 String valor = rm.getValor();
-                Double valorNumerico = parseValorNumerico(metrica.getTipo(), valor);
-                String formatado = formatarValor(metrica.getTipo(), valor);
+                Double valorNumerico = parseValorNumerico(metrica, rm.getId(), valor);
+                String formatado = formatarValor(metrica.getTipo(), valorNumerico, valor);
 
                 pontosPorMetrica.get(metrica.getId()).add(new PontoMetricaDashboardDTO(
                         sessaoId,
@@ -64,12 +67,13 @@ public final class AgregadorEvolucaoDesempenho {
             // RN-017: mantida no histórico como "métrica descontinuada"
             String statusMetrica = descontinuada ? "métrica descontinuada" : "ATIVA";
 
-            TendenciaMetricaDTO tendencia = calcularTendencia(metrica.getTipo(), pontos);
+            TendenciaMetricaDTO tendencia = calcularTendencia(metrica, pontos);
 
             resultado.add(new SerieMetricaDashboardDTO(
                     metrica.getId(),
                     metrica.getTitulo(),
                     metrica.getTipo(),
+                    metrica.getUnidade(),
                     Boolean.TRUE.equals(metrica.getObrigatoria()),
                     metrica.getQuemPreenche(),
                     descontinuada,
@@ -84,7 +88,8 @@ public final class AgregadorEvolucaoDesempenho {
         return resultado;
     }
 
-    private static TendenciaMetricaDTO calcularTendencia(TipoMetrica tipo, List<PontoMetricaDashboardDTO> pontos) {
+    private static TendenciaMetricaDTO calcularTendencia(Metrica metrica, List<PontoMetricaDashboardDTO> pontos) {
+        TipoMetrica tipo = metrica.getTipo();
         List<PontoMetricaDashboardDTO> pontosNumericos = pontos.stream()
                 .filter(p -> p.valorNumerico() != null)
                 .toList();
@@ -117,14 +122,21 @@ public final class AgregadorEvolucaoDesempenho {
         }
 
         // Indicador visual de melhoria ou regressão (US-15 C3)
+        // Métricas de duração Strava (TEMPO_MOVIMENTO / TEMPO_TOTAL) representam volume neutro; ritmo e cronômetro manual mantêm redução como melhoria
         String indicadorVisual;
+        boolean tempoNeutro = tipo == TipoMetrica.TEMPO
+                && (metrica.getCampoStrava() == CampoStrava.TEMPO_MOVIMENTO
+                || metrica.getCampoStrava() == CampoStrava.TEMPO_TOTAL);
         if (tipo == TipoMetrica.TEMPO) {
-            // Em métricas de tempo (ex: tempo de corrida/natação), redução de tempo é melhoria
-            indicadorVisual = switch (direcao) {
-                case "REDUCAO" -> "MELHORIA";
-                case "AUMENTO" -> "REGRESSAO";
-                default -> "NEUTRO";
-            };
+            if (tempoNeutro) {
+                indicadorVisual = "NEUTRO";
+            } else {
+                indicadorVisual = switch (direcao) {
+                    case "REDUCAO" -> "MELHORIA";
+                    case "AUMENTO" -> "REGRESSAO";
+                    default -> "NEUTRO";
+                };
+            }
         } else {
             indicadorVisual = switch (direcao) {
                 case "AUMENTO" -> "MELHORIA";
@@ -136,6 +148,13 @@ public final class AgregadorEvolucaoDesempenho {
         String resumo;
         if (direcao.equals("ESTAVEL")) {
             resumo = "Desempenho estável no período.";
+        } else if (tipo == TipoMetrica.TEMPO) {
+            String deltaFormatado = FormatadorTempo.formatarDeltaTempoSegundos((int) Math.round(delta));
+            if (direcao.equals("AUMENTO")) {
+                resumo = String.format(Locale.US, "Aumento de %.1f%% no período (%s).", percentual, deltaFormatado);
+            } else {
+                resumo = String.format(Locale.US, "Redução de %.1f%% no período (%s).", Math.abs(percentual), deltaFormatado);
+            }
         } else if (direcao.equals("AUMENTO")) {
             resumo = String.format(Locale.US, "Aumento de %.1f%% no período (+%.2f).", percentual, delta);
         } else {
@@ -256,35 +275,49 @@ public final class AgregadorEvolucaoDesempenho {
         return sessao.getDataReal() != null ? sessao.getDataReal() : sessao.getDataPlanejada();
     }
 
-    private static Double parseValorNumerico(TipoMetrica tipo, String valor) {
-        if (valor == null || valor.isBlank()) return null;
+    private static Double parseValorNumerico(Metrica metrica, UUID registroId, String valor) {
+        TipoMetrica tipo = metrica.getTipo();
+        if (tipo == TipoMetrica.TEXTO) {
+            return null;
+        }
+        if (valor == null || valor.isBlank()) {
+            log.warn("Ponto em branco ignorado na agregação de evolução: metricaId={}, registroId={}",
+                    metrica.getId(), registroId);
+            return null;
+        }
+        String trimmed = valor.trim();
         try {
             return switch (tipo) {
-                case NUMERICO -> Double.parseDouble(valor.trim().replace(',', '.'));
+                case NUMERICO -> Double.parseDouble(trimmed.replace(',', '.'));
                 case TEMPO -> {
-                    String[] partes = valor.trim().split(":");
-                    if (partes.length == 2) {
-                        long min = Long.parseLong(partes[0]);
-                        long seg = Long.parseLong(partes[1]);
-                        yield (double) (min * 60 + seg);
+                    Optional<Integer> segundos = FormatadorTempo.parseTempoParaSegundos(trimmed);
+                    if (segundos.isEmpty()) {
+                        log.warn("Ponto temporal inválido ignorado na agregação de evolução: metricaId={}, registroId={}, valor='{}'",
+                                metrica.getId(), registroId, valor);
+                        yield null;
                     }
-                    yield null;
+                    yield segundos.get().doubleValue();
                 }
-                case FREQUENCIA_CARDIACA -> Double.parseDouble(valor.trim());
+                case FREQUENCIA_CARDIACA -> Double.parseDouble(trimmed);
                 case TEXTO -> null;
             };
         } catch (Exception e) {
+            log.warn("Ponto inválido ignorado na agregação de evolução: metricaId={}, registroId={}, valor='{}'",
+                    metrica.getId(), registroId, valor);
             return null;
         }
     }
 
-    private static String formatarValor(TipoMetrica tipo, String valor) {
+    private static String formatarValor(TipoMetrica tipo, Double valorNumerico, String valor) {
         if (valor == null) return "";
+        String trimmed = valor.trim();
         return switch (tipo) {
-            case NUMERICO -> valor.trim();
-            case TEMPO -> valor.trim();
-            case FREQUENCIA_CARDIACA -> valor.trim().endsWith(" bpm") ? valor.trim() : valor.trim() + " bpm";
-            case TEXTO -> valor.trim();
+            case NUMERICO -> trimmed;
+            case TEMPO -> valorNumerico != null
+                    ? FormatadorTempo.formatarTempoSegundos((int) Math.round(valorNumerico))
+                    : trimmed;
+            case FREQUENCIA_CARDIACA -> trimmed.endsWith(" bpm") ? trimmed : trimmed + " bpm";
+            case TEXTO -> trimmed;
         };
     }
 

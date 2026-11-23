@@ -12,7 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ValidadorValorMetricaTest {
 
     @ParameterizedTest
-    @ValueSource(strings = {"05:30", "59:59", "120:00", "00:00", "01:15:30", "02:00:00", "10:00:00", "00:59:59"})
+    @ValueSource(strings = {"05:30", "59:59", "00:00", "01:15:30", "02:00:00", "10:00:00", "00:59:59"})
     @DisplayName("RN-015: Formatos válidos de tempo (mm:ss e hh:mm:ss)")
     void tempoValido(String valor) {
         Metrica metrica = Metrica.builder()
@@ -44,6 +44,7 @@ class ValidadorValorMetricaTest {
                 .contains("Verifique o formato esperado: deve estar no formato mm:ss ou hh:mm:ss");
         assertThat(ValidadorValorMetrica.validar(metrica, "01:00:60")).isNotNull();
         assertThat(ValidadorValorMetrica.validar(metrica, "05:60")).isNotNull();
+        assertThat(ValidadorValorMetrica.validar(metrica, "120:00")).isNotNull();
         assertThat(ValidadorValorMetrica.validar(metrica, "invalido")).isNotNull();
         assertThat(ValidadorValorMetrica.validar(metrica, "   ")).isNotNull()
                 .contains("o valor não pode estar em branco");
@@ -61,5 +62,28 @@ class ValidadorValorMetricaTest {
         assertThat(ValidadorValorMetrica.validar(fc, "150")).isNull();
         assertThat(ValidadorValorMetrica.validar(fc, "25")).isNotNull();
         assertThat(ValidadorValorMetrica.validar(fc, "300")).isNotNull();
+    }
+
+    @Test
+    @DisplayName("Normalização canônica para tempo, ritmo e numérico")
+    void validarENormalizar_padronizaTempoRitmoENumerico() {
+        Metrica numerica = Metrica.builder().titulo("Carga").tipo(TipoMetrica.NUMERICO).unidade("kg").build();
+        var resNum = ValidadorValorMetrica.validarENormalizar(numerica, " 35,5 ");
+        assertThat(resNum.valido()).isTrue();
+        assertThat(resNum.valorNormalizado()).isEqualTo("35.5");
+
+        Metrica cronometro = Metrica.builder().titulo("Tempo Total").tipo(TipoMetrica.TEMPO).unidade("mm:ss").build();
+        assertThat(ValidadorValorMetrica.validarENormalizar(cronometro, "0:00").valorNormalizado()).isEqualTo("00:00");
+        assertThat(ValidadorValorMetrica.validarENormalizar(cronometro, "1:15:30").valorNormalizado()).isEqualTo("01:15:30");
+        assertThat(ValidadorValorMetrica.validarENormalizar(cronometro, "75:30").valido()).isFalse();
+
+        Metrica ritmo = Metrica.builder().titulo("Pace").tipo(TipoMetrica.TEMPO).unidade("min/km").build();
+        var resPace1 = ValidadorValorMetrica.validarENormalizar(ritmo, "5:03");
+        assertThat(resPace1.valido()).isTrue();
+        assertThat(resPace1.valorNormalizado()).isEqualTo("05:03");
+        var resPace2 = ValidadorValorMetrica.validarENormalizar(ritmo, "75:30");
+        assertThat(resPace2.valido()).isTrue();
+        assertThat(resPace2.valorNormalizado()).isEqualTo("75:30");
+        assertThat(ValidadorValorMetrica.validarENormalizar(ritmo, "01:05:30").valido()).isFalse();
     }
 }

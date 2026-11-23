@@ -6,12 +6,17 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
+import java.util.Set;
 import java.util.UUID;
 
 @Repository
 public interface RegistroMetricaRepository extends JpaRepository<RegistroMetrica, UUID> {
 
     boolean existsByMetricaId(UUID metricaId);
+
+    @Query("SELECT DISTINCT rm.metrica.id FROM RegistroMetrica rm WHERE rm.metrica.id IN :metricaIds")
+    Set<UUID> findMetricaIdsWithRegistros(@Param("metricaIds") Collection<UUID> metricaIds);
 
     @Query("SELECT COUNT(DISTINCT a.id) FROM RegistroMetrica rm " +
             "JOIN rm.desempenho d " +

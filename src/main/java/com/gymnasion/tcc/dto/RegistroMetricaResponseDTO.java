@@ -8,5 +8,10 @@ public record RegistroMetricaResponseDTO(
         UUID metricaId,
         String tituloMetrica,
         TipoMetrica tipoMetrica,
+        String unidade,
         String valor
-) {}
+) {
+    public RegistroMetricaResponseDTO(UUID id, UUID metricaId, String tituloMetrica, TipoMetrica tipoMetrica, String valor) {
+        this(id, metricaId, tituloMetrica, tipoMetrica, null, valor);
+    }
+}

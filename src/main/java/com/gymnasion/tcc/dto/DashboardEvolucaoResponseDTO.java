@@ -47,13 +47,28 @@ public record DashboardEvolucaoResponseDTO(
             UUID metricaId,
             String titulo,
             TipoMetrica tipo,
+            String unidade,
             boolean obrigatoria,
             ResponsavelPreenchimento quemPreenche,
             boolean descontinuada,
             String statusMetrica,
             TendenciaMetricaDTO tendencia,
             List<PontoMetricaDashboardDTO> pontos
-    ) {}
+    ) {
+        public SerieMetricaDashboardDTO(
+                UUID metricaId,
+                String titulo,
+                TipoMetrica tipo,
+                boolean obrigatoria,
+                ResponsavelPreenchimento quemPreenche,
+                boolean descontinuada,
+                String statusMetrica,
+                TendenciaMetricaDTO tendencia,
+                List<PontoMetricaDashboardDTO> pontos
+        ) {
+            this(metricaId, titulo, tipo, null, obrigatoria, quemPreenche, descontinuada, statusMetrica, tendencia, pontos);
+        }
+    }
 
     public record TendenciaMetricaDTO(
             Double valorInicial,

@@ -28,6 +28,9 @@ public class Metrica {
     @Column(nullable = false, length = 50)
     private TipoMetrica tipo;
 
+    @Column(length = 20)
+    private String unidade;
+
     @Builder.Default
     @Column(nullable = false)
     private Boolean obrigatoria = false;

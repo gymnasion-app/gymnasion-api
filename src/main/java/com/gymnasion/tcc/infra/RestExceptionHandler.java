@@ -7,6 +7,7 @@ import com.gymnasion.tcc.exceptions.DuplicateResourceException;
 import com.gymnasion.tcc.exceptions.MetricasInvalidasException;
 import com.gymnasion.tcc.exceptions.NotFoundException;
 import com.gymnasion.tcc.exceptions.RelatorioSemDadosException;
+import com.gymnasion.tcc.exceptions.StravaRateLimitException;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -227,6 +228,18 @@ public class RestExceptionHandler {
             periodoSugerido.put("dataFim", ex.getDataFimSugerida());
         }
         problemDetail.setProperty("periodoSugerido", periodoSugerido);
+        return problemDetail;
+    }
+
+    @ExceptionHandler(StravaRateLimitException.class)
+    public ProblemDetail handleStravaRateLimitException(StravaRateLimitException ex) {
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.TOO_MANY_REQUESTS,
+                ex.getMessage()
+        );
+        problemDetail.setTitle("Limite de Requisições do Strava Atingido");
+        problemDetail.setType(URI.create("https://api.gymnasion.com/errors/strava-rate-limit"));
+        problemDetail.setProperty("timestamp", Instant.now());
         return problemDetail;
     }
 

@@ -65,4 +65,12 @@ public class AlunoStravaController {
             @RequestParam(name = "limite", required = false, defaultValue = "10") Integer limite) {
         return ResponseEntity.ok(stravaService.listarAtividadesRecentes(usuario, limite));
     }
+
+    @GetMapping("/atividades/{atividadeId}")
+    @Operation(summary = "Obter detalhes de uma atividade do Strava (inclui calorias e dados completos)")
+    public ResponseEntity<StravaAtividadeDTO> obterDetalheAtividade(
+            @AuthenticationPrincipal Usuario usuario,
+            @PathVariable String atividadeId) {
+        return ResponseEntity.ok(stravaService.obterDetalheAtividade(usuario, atividadeId));
+    }
 }

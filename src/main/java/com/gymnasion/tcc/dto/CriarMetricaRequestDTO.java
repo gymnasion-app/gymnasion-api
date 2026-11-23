@@ -24,9 +24,16 @@ public record CriarMetricaRequestDTO(
         @NotNull(message = "O responsável pelo preenchimento é obrigatório.")
         ResponsavelPreenchimento quemPreenche,
 
-        CampoStrava campoStrava
+        CampoStrava campoStrava,
+
+        @Size(max = 20, message = "A unidade deve ter no máximo 20 caracteres.")
+        String unidade
 ) {
     public CriarMetricaRequestDTO(Long modalidadeId, String titulo, TipoMetrica tipo, Boolean obrigatoria, ResponsavelPreenchimento quemPreenche) {
-        this(modalidadeId, titulo, tipo, obrigatoria, quemPreenche, null);
+        this(modalidadeId, titulo, tipo, obrigatoria, quemPreenche, null, null);
+    }
+
+    public CriarMetricaRequestDTO(Long modalidadeId, String titulo, TipoMetrica tipo, Boolean obrigatoria, ResponsavelPreenchimento quemPreenche, CampoStrava campoStrava) {
+        this(modalidadeId, titulo, tipo, obrigatoria, quemPreenche, campoStrava, null);
     }
 }

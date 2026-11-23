@@ -13,6 +13,7 @@ import com.gymnasion.tcc.dto.StravaStatusResponseDTO;
 import com.gymnasion.tcc.exceptions.BusinessException;
 import com.gymnasion.tcc.exceptions.DuplicateResourceException;
 import com.gymnasion.tcc.exceptions.NotFoundException;
+import com.gymnasion.tcc.exceptions.StravaRateLimitException;
 import com.gymnasion.tcc.infra.config.StravaProperties;
 import com.gymnasion.tcc.repository.AlunoRepository;
 import com.gymnasion.tcc.repository.IntegracaoStravaRepository;
@@ -23,9 +24,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
@@ -488,15 +494,16 @@ class StravaServiceTest {
 
         List<StravaAtividadeDTO> atividades = stravaService.listarAtividadesRecentes(usuarioAluno, 5);
 
-        assertThat(atividades).hasSize(3);
+        assertThat(atividades).hasSize(5);
         StravaAtividadeDTO corrida = atividades.get(0);
         assertThat(corrida.nome()).isEqualTo("Corrida Matinal no Parque");
         assertThat(corrida.distanciaKm()).isEqualTo(5.23);
         assertThat(corrida.tempoFormatado()).isEqualTo("27:15");
         assertThat(corrida.duracaoMinutos()).isEqualTo(27);
         assertThat(corrida.frequenciaCardiacaMedia()).isEqualTo(154);
-        assertThat(corrida.ritmoMedio()).isEqualTo("05:13 min/km");
-        assertThat(atividades.get(2).ritmoMedio()).isEqualTo("24,7 km/h");
+        assertThat(corrida.ritmoMedio()).isEqualTo("05:13");
+        assertThat(atividades.get(2).ritmoMedio()).isNull();
+        assertThat(atividades.get(2).velocidadeMediaKmh()).isEqualTo(24.7);
     }
 
     @Test
@@ -530,7 +537,7 @@ class StravaServiceTest {
         assertThat(corrida.data()).isEqualTo(LocalDate.of(2026, 10, 20));
         assertThat(corrida.dataHora().getOffset()).isEqualTo(ZoneOffset.ofHours(-3));
         assertThat(corrida.dataHora().getHour()).isEqualTo(22);
-        assertThat(corrida.ritmoMedio()).isEqualTo("05:00 min/km");
+        assertThat(corrida.ritmoMedio()).isEqualTo("05:00");
         assertThat(corrida.distanciaFormatada()).isEqualTo("5,00 km");
         assertThat(corrida.frequenciaCardiacaMedia()).isEqualTo(150);
         assertThat(corrida.frequenciaCardiacaMaxima()).isEqualTo(172);
@@ -538,13 +545,17 @@ class StravaServiceTest {
 
         StravaAtividadeDTO natacao = atividades.get(1);
         assertThat(natacao.esporte()).isEqualTo("Natação");
-        assertThat(natacao.ritmoMedio()).isEqualTo("02:00 min/100m");
+        assertThat(natacao.ritmoMedio()).isEqualTo("02:00");
         assertThat(natacao.frequenciaCardiacaMedia()).isNull();
+        // M1: velocidade bruta (m/s) permite converter o ritmo para a unidade da métrica no front
+        assertThat(natacao.velocidadeMediaMs()).isEqualTo(0.833);
 
         StravaAtividadeDTO bike = atividades.get(2);
         assertThat(bike.tipo()).isEqualTo("MountainBikeRide");
         assertThat(bike.esporte()).isEqualTo("Ciclismo");
-        assertThat(bike.ritmoMedio()).isEqualTo("30,0 km/h");
+        assertThat(bike.ritmoMedio()).isNull();
+        assertThat(bike.velocidadeMediaKmh()).isEqualTo(30.0);
+        assertThat(bike.velocidadeMediaMs()).isEqualTo(8.333);
     }
 
     @Test
@@ -639,20 +650,22 @@ class StravaServiceTest {
     }
 
     @Test
-    @DisplayName("US-14 C3: Erros de negócio não desfazem token renovado nem notificação")
-    void metodosQueChamamOStrava_naoFazemRollbackEmBusinessException() throws NoSuchMethodException {
+    @DisplayName("US-14 C3: Métodos com chamada HTTP ao Strava não mantêm @Transactional aberta (usam TransactionTemplate)")
+    void metodosQueChamamOStrava_naoMantemTransactionalAberta() throws NoSuchMethodException {
         List<java.lang.reflect.Method> metodos = List.of(
                 StravaService.class.getMethod("conectar", Usuario.class, StravaConectarRequestDTO.class),
                 StravaService.class.getMethod("obterStatus", Usuario.class),
                 StravaService.class.getMethod("obterStatusPorPersonal", UUID.class, UUID.class),
                 StravaService.class.getMethod("desconectar", Usuario.class),
                 StravaService.class.getMethod("listarAtividadesRecentes", Usuario.class, Integer.class),
-                StravaService.class.getMethod("listarAtividadesPorPersonal", UUID.class, UUID.class, Integer.class));
+                StravaService.class.getMethod("listarAtividadesPorPersonal", UUID.class, UUID.class, Integer.class),
+                StravaService.class.getMethod("obterDetalheAtividade", Usuario.class, String.class),
+                StravaService.class.getMethod("obterDetalheAtividadePorPersonal", UUID.class, UUID.class, String.class));
 
         for (java.lang.reflect.Method metodo : metodos) {
-            assertThat(metodo.getAnnotation(Transactional.class).noRollbackFor())
+            assertThat(metodo.getAnnotation(Transactional.class))
                     .as(metodo.getName())
-                    .contains(BusinessException.class);
+                    .isNull();
         }
     }
 
@@ -714,5 +727,232 @@ class StravaServiceTest {
         assertThatThrownBy(() -> stravaService.listarAtividadesPorPersonal(alunoInativo.getId(), usuarioPersonal.getId(), 10))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("Erro. Este aluno está inativo.");
+    }
+
+    @Test
+    @DisplayName("Detalhar atividade do aluno em modo mock e via HTTP (incluindo calorias)")
+    void obterDetalheAtividade_mock_e_http() {
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        IntegracaoStrava mockIntegracao = IntegracaoStrava.builder()
+                .id(UUID.randomUUID())
+                .aluno(aluno)
+                .accessToken("mock-access-token")
+                .refreshToken("mock-refresh-token")
+                .expiraEm(agora().plusDays(1))
+                .atletaId(123L)
+                .nomeAtleta("Atleta Mock")
+                .escopo("read,activity:read_all")
+                .build();
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(mockIntegracao));
+
+        stravaProperties.setMockEnabled(true);
+        StravaAtividadeDTO mockDetalhe = stravaService.obterDetalheAtividade(usuarioAluno, "mock-act-1");
+        assertThat(mockDetalhe.id()).isEqualTo("mock-act-1");
+        assertThat(mockDetalhe.calorias()).isNotNull();
+
+        assertThatThrownBy(() -> stravaService.obterDetalheAtividade(usuarioAluno, "inexistente"))
+                .isInstanceOf(NotFoundException.class);
+
+        IntegracaoStrava integracao = integracaoReal(agora().plusDays(1));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracao));
+        stravaProperties.setMockEnabled(false);
+        String detalheJson = """
+                {"id":999,"name":"Treino Longo","type":"Run","sport_type":"Run",
+                 "start_date":"2026-10-21T10:00:00Z","start_date_local":"2026-10-21T07:00:00Z","utc_offset":-10800.0,
+                 "distance":10000.0,"moving_time":3720,"elapsed_time":3800,
+                 "average_cadence":85.0,"average_heartrate":152.0,"calories":640.0}
+                """;
+        stravaApi.expect(requestTo("https://www.strava.com/api/v3/activities/999"))
+                .andExpect(header("Authorization", "Bearer access-abc"))
+                .andRespond(withSuccess(detalheJson, MediaType.APPLICATION_JSON));
+
+        StravaAtividadeDTO httpDetalhe = stravaService.obterDetalheAtividade(usuarioAluno, "999");
+        stravaApi.verify();
+        assertThat(httpDetalhe.tempoFormatado()).isEqualTo("01:02:00");
+        assertThat(httpDetalhe.tempoTotalFormatado()).isEqualTo("01:03:20");
+        assertThat(httpDetalhe.duracaoMinutos()).isEqualTo(62);
+        assertThat(httpDetalhe.cadenciaMedia()).isEqualTo(170.0);
+        assertThat(httpDetalhe.calorias()).isEqualTo(640.0);
+    }
+
+    @Test
+    @DisplayName("Personal obtém detalhe da atividade do Strava do aluno")
+    void obterDetalheAtividadePorPersonal_retornaDetalhes() {
+        when(alunoRepository.findById(aluno.getId())).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracaoReal(agora().plusDays(1))));
+        String detalheJson = """
+                {"id":888,"name":"Remo Indoor","type":"Rowing","sport_type":"Rowing",
+                 "start_date":"2026-10-21T12:00:00Z","start_date_local":"2026-10-21T09:00:00Z","utc_offset":-10800.0,
+                 "distance":2000.0,"moving_time":480,"calories":210.0}
+                """;
+        stravaApi.expect(requestTo("https://www.strava.com/api/v3/activities/888"))
+                .andRespond(withSuccess(detalheJson, MediaType.APPLICATION_JSON));
+
+        StravaAtividadeDTO dto = stravaService.obterDetalheAtividadePorPersonal(aluno.getId(), usuarioPersonal.getId(), "888");
+        stravaApi.verify();
+        assertThat(dto.ritmoMedio()).isEqualTo("02:00");
+        assertThat(dto.calorias()).isEqualTo(210.0);
+    }
+
+    @Test
+    @DisplayName("HTTP 429 lança StravaRateLimitException sem marcar reconexão pendente")
+    void listarAtividades_429_lancaStravaRateLimitSemReconexaoPendente() {
+        IntegracaoStrava integracao = integracaoReal(agora().plusDays(1));
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracao));
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.add("X-RateLimit-Usage", "100,1000");
+        stravaApi.expect(requestTo(ATIVIDADES_URL + "?per_page=10"))
+                .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS).headers(headers));
+
+        assertThatThrownBy(() -> stravaService.listarAtividadesRecentes(usuarioAluno, 10))
+                .isInstanceOf(StravaRateLimitException.class)
+                .hasMessageContaining("Limite temporário de requisições do Strava atingido");
+
+        assertThat(integracao.isReconexaoPendente()).isFalse();
+        verifyNoInteractions(notificacaoService);
+    }
+
+    @Test
+    @DisplayName("Conversão: carry 60s em ritmo, cadência Run dobrada e moving_time 0 -> duracaoMinutos null")
+    void converterDadosStrava_carryCadenciaEDuracaoZero() {
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracaoReal(agora().plusDays(1))));
+        String json = """
+                [
+                  {"id":10,"name":"Carry 60s","type":"Run","sport_type":"Run",
+                   "start_date":"2026-10-21T10:00:00Z","start_date_local":"2026-10-21T07:00:00Z","utc_offset":-10800.0,
+                   "distance":1001.0,"moving_time":360,"average_cadence":85.6},
+                  {"id":11,"name":"Curta","type":"Walk","sport_type":"Walk",
+                   "start_date":"2026-10-21T11:00:00Z","start_date_local":"2026-10-21T08:00:00Z","utc_offset":-10800.0,
+                   "distance":0.0,"moving_time":0}
+                ]
+                """;
+        stravaApi.expect(requestTo(ATIVIDADES_URL + "?per_page=10"))
+                .andRespond(withSuccess(json, MediaType.APPLICATION_JSON));
+
+        List<StravaAtividadeDTO> lista = stravaService.listarAtividadesRecentes(usuarioAluno, 10);
+        assertThat(lista.get(0).ritmoMedio()).isEqualTo("06:00");
+        assertThat(lista.get(0).cadenciaMedia()).isEqualTo(171.0);
+        assertThat(lista.get(1).duracaoMinutos()).isNull();
+    }
+
+    @Test
+    @DisplayName("TransactionTemplate comita leitura, refresh de token e marcação REQUIRES_NEW em 401")
+    void transactionTemplate_usaTransacoesCurtasERequiresNew() {
+        PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
+        when(txManager.getTransaction(any())).thenAnswer(inv -> mock(TransactionStatus.class));
+
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        StravaService serviceComTx = new StravaService(
+                integracaoStravaRepository, alunoRepository, notificacaoService,
+                stravaProperties, objectMapper, builder, Clock.fixed(AGORA, ZoneOffset.UTC), txManager);
+
+        IntegracaoStrava integracao = integracaoReal(agora().minusMinutes(1));
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracao));
+        when(integracaoStravaRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        server.expect(requestTo(TOKEN_URL)).andRespond(withSuccess(respostaToken(12345678L), MediaType.APPLICATION_JSON));
+        server.expect(requestTo(ATIVIDADES_URL + "?per_page=10")).andRespond(withUnauthorizedRequest());
+
+        assertThatThrownBy(() -> serviceComTx.listarAtividadesRecentes(usuarioAluno, 10))
+                .isInstanceOf(BusinessException.class);
+
+        server.verify();
+        ArgumentCaptor<TransactionDefinition> defCaptor = ArgumentCaptor.forClass(TransactionDefinition.class);
+        verify(txManager, atLeast(3)).getTransaction(defCaptor.capture());
+        assertThat(defCaptor.getAllValues()).anyMatch(TransactionDefinition::isReadOnly);
+        assertThat(defCaptor.getAllValues()).anyMatch(def ->
+                def.getPropagationBehavior() == TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        verify(txManager, atLeast(3)).commit(any());
+    }
+
+    private static final String DETALHE_URL = "https://www.strava.com/api/v3/activities/";
+
+    private String detalheJson(long id, long atletaId) {
+        return """
+                {"id":%d,"name":"Treino","type":"Run","sport_type":"Run","athlete":{"id":%d},
+                 "start_date":"2026-10-21T10:00:00Z","start_date_local":"2026-10-21T07:00:00Z","utc_offset":-10800.0,
+                 "distance":5000.0,"moving_time":1500,"calories":300.0}
+                """.formatted(id, atletaId);
+    }
+
+    @Test
+    @DisplayName("M3: id de atividade fora do formato numérico é rejeitado sem chamar o Strava")
+    void obterDetalhe_idNaoNumerico_rejeitadoSemChamarStrava() {
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracaoReal(agora().plusDays(1))));
+
+        for (String invalido : List.of("..", "abc", "12/34", "1".repeat(21))) {
+            assertThatThrownBy(() -> stravaService.obterDetalheAtividade(usuarioAluno, invalido))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessage("Identificador de atividade do Strava inválido.");
+        }
+        stravaApi.verify();
+    }
+
+    @Test
+    @DisplayName("M3: atividade de outro atleta é tratada como não encontrada")
+    void obterDetalhe_atividadeDeOutroAtleta_naoEncontrada() {
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracaoReal(agora().plusDays(1))));
+        stravaApi.expect(requestTo(DETALHE_URL + "555"))
+                .andRespond(withSuccess(detalheJson(555, 99999L), MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> stravaService.obterDetalheAtividade(usuarioAluno, "555"))
+                .isInstanceOf(NotFoundException.class)
+                .hasMessage("Atividade do Strava não encontrada.");
+        stravaApi.verify();
+    }
+
+    @Test
+    @DisplayName("M3: segunda consulta do mesmo detalhe usa o cache e não chama o Strava de novo")
+    void obterDetalhe_segundaChamadaUsaCache() {
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracaoReal(agora().plusDays(1))));
+        stravaApi.expect(org.springframework.test.web.client.ExpectedCount.once(), requestTo(DETALHE_URL + "777"))
+                .andRespond(withSuccess(detalheJson(777, 12345678L), MediaType.APPLICATION_JSON));
+
+        StravaAtividadeDTO primeira = stravaService.obterDetalheAtividade(usuarioAluno, "777");
+        StravaAtividadeDTO segunda = stravaService.obterDetalheAtividade(usuarioAluno, "777");
+
+        stravaApi.verify();
+        assertThat(segunda).isEqualTo(primeira);
+        assertThat(segunda.calorias()).isEqualTo(300.0);
+    }
+
+    @Test
+    @DisplayName("M3: acima de 20 consultas reais em 15 minutos o aluno recebe limite (429) sem chamar o Strava")
+    void limitePorAluno_retornaRateLimit() {
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracaoReal(agora().plusDays(1))));
+        stravaApi.expect(org.springframework.test.web.client.ExpectedCount.times(20), requestTo(containsString(ATIVIDADES_URL)))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON));
+
+        // Limites distintos geram chaves de cache distintas, forçando chamadas reais
+        for (int limite = 1; limite <= 20; limite++) {
+            stravaService.listarAtividadesRecentes(usuarioAluno, limite);
+        }
+        assertThatThrownBy(() -> stravaService.listarAtividadesRecentes(usuarioAluno, 21))
+                .isInstanceOf(StravaRateLimitException.class)
+                .hasMessageContaining("Muitas consultas ao Strava em pouco tempo");
+        stravaApi.verify();
+    }
+
+    @Test
+    @DisplayName("B5: HTTP 429 na renovação do token lança StravaRateLimitException sem pedir reconexão")
+    void renovacao429_lancaRateLimitSemReconexao() {
+        IntegracaoStrava integracao = integracaoReal(agora().minusHours(1));
+        when(alunoRepository.findByUsuario(usuarioAluno)).thenReturn(Optional.of(aluno));
+        when(integracaoStravaRepository.findByAluno(aluno)).thenReturn(Optional.of(integracao));
+        stravaApi.expect(requestTo(TOKEN_URL)).andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS));
+
+        assertThatThrownBy(() -> stravaService.listarAtividadesRecentes(usuarioAluno, 10))
+                .isInstanceOf(StravaRateLimitException.class);
+        assertThat(integracao.isReconexaoPendente()).isFalse();
+        verifyNoInteractions(notificacaoService);
     }
 }

@@ -249,7 +249,7 @@ class RelatorioPerformanceServiceTest {
                 .contains("Tempo 100m")
                 .contains("Valores registrados")
                 .contains("2.000")
-                .contains("1:38");
+                .contains("01:38");
     }
 
     @Test
@@ -585,7 +585,9 @@ class RelatorioPerformanceServiceTest {
                 .contains("16/03/2026")
                 .doesNotContain("10/03/2026")
                 .doesNotContain("09/03/2026")
-                .doesNotContain("1.800");
+                // O valor 1.800 pode aparecer como marca do eixo Y; a exclusão é verificada pela contagem de registros
+                .contains("02/03/2026 – 16/03/2026 · 2 registros")
+                .doesNotContain("3 registros");
     }
 
     @Test
@@ -716,5 +718,28 @@ class RelatorioPerformanceServiceTest {
 
         assertThat(relatorio.conteudo()).isNotEmpty();
         assertThat(tempo).isLessThan(Duration.ofSeconds(40));
+    }
+
+    @Test
+    @DisplayName("US16: PDF exibe unidade sem duplicação no cabeçalho e formata duração >= 60min como Xh Ymin")
+    void US16_pdfExibeUnidadeSemDuplicacaoEDuracaoFormatada() throws IOException {
+        metricaCarga.setTitulo("Distância (km)");
+        metricaCarga.setUnidade("km");
+        metricaTempo.setUnidade("hh:mm:ss");
+
+        Desempenho d = criarDesempenho(LocalDate.of(2026, 3, 2), LocalDate.of(2026, 3, 2), 6,
+                List.of(registro(metricaCarga, "10.5"), registro(metricaTempo, "01:15:30")));
+        d.getSessaoTreino().setDuracao(75);
+
+        mockPersonalComAluno();
+        when(desempenhoRepository.findByAlunoIdAndPeriodoWithMetricas(aluno.getId(), inicio, fim)).thenReturn(List.of(d));
+
+        RelatorioPdfDTO relatorio = relatorioPerformanceService.gerarRelatorioPeloPersonal(usuarioPersonal, aluno.getId(), filtro(null, inicio, fim));
+        String texto = extrairTexto(relatorio.conteudo());
+
+        assertThat(texto).contains("Distância (km)").doesNotContain("Distância (km) (km)");
+        assertThat(texto).contains("Tempo 100m (hh:mm:ss)");
+        assertThat(texto).contains("01:15:30");
+        assertThat(texto).contains("1h 15min");
     }
 }

@@ -5,6 +5,7 @@ import com.gymnasion.tcc.domain.Metrica;
 import com.gymnasion.tcc.domain.Modalidade;
 import com.gymnasion.tcc.domain.PersonalTrainer;
 import com.gymnasion.tcc.domain.Usuario;
+import com.gymnasion.tcc.domain.enums.CampoStrava;
 import com.gymnasion.tcc.domain.enums.StatusSessaoTreino;
 import com.gymnasion.tcc.domain.enums.TipoMetrica;
 import com.gymnasion.tcc.dto.AtualizarMetricaRequestDTO;
@@ -27,6 +28,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -64,12 +67,19 @@ public class MetricaService {
             throw new BusinessException("O campo do Strava selecionado não é compatível com o tipo de métrica.");
         }
 
+        String unidadeNormalizada = normalizarUnidade(dto.tipo(), dto.unidade(), dto.campoStrava(), modalidade.getNome());
+        CampoStrava campoStravaPersistido = dto.campoStrava() == CampoStrava.NENHUM ? null : dto.campoStrava();
+        if (campoStravaPersistido != null && !campoStravaPersistido.isCompativelCom(dto.tipo(), unidadeNormalizada)) {
+            throw new BusinessException("Campo Strava incompatível com o tipo/unidade da métrica.");
+        }
+
         Metrica metrica = Metrica.builder()
                 .titulo(dto.titulo().trim())
                 .tipo(dto.tipo())
+                .unidade(unidadeNormalizada)
                 .obrigatoria(dto.obrigatoria())
                 .quemPreenche(dto.quemPreenche())
-                .campoStrava(dto.campoStrava())
+                .campoStrava(campoStravaPersistido)
                 .modalidade(modalidade)
                 .personalTrainer(personal)
                 .ativo(true)
@@ -77,29 +87,31 @@ public class MetricaService {
 
         metrica = metricaRepository.save(metrica);
 
-        return toResponseDTO(metrica, 0L);
+        return toResponseDTO(metrica, 0L, false);
     }
 
     @Transactional(readOnly = true)
     public Page<MetricaResponseDTO> listarMetricasPorModalidade(Usuario usuario, Long modalidadeId, Pageable pageable) {
         PersonalTrainer personal = obterPersonalLogado(usuario);
 
-        return metricaRepository.findByPersonalTrainerIdAndModalidadeId(personal.getId(), modalidadeId, pageable)
-                .map(metrica -> {
-                    Long qtdAlunos = registroMetricaRepository.countAlunosComRegistrosByMetricaId(metrica.getId());
-                    return toResponseDTO(metrica, qtdAlunos);
-                });
+        Page<Metrica> page = metricaRepository.findByPersonalTrainerIdAndModalidadeId(personal.getId(), modalidadeId, pageable);
+        Set<UUID> idsComHistorico = buscarIdsComHistorico(page.getContent());
+        return page.map(metrica -> {
+            Long qtdAlunos = registroMetricaRepository.countAlunosComRegistrosByMetricaId(metrica.getId());
+            return toResponseDTO(metrica, qtdAlunos, idsComHistorico.contains(metrica.getId()));
+        });
     }
 
     @Transactional(readOnly = true)
     public List<MetricaResponseDTO> listarMetricasPorModalidade(Usuario usuario, Long modalidadeId) {
         PersonalTrainer personal = obterPersonalLogado(usuario);
 
-        return metricaRepository.findByPersonalTrainerIdAndModalidadeId(personal.getId(), modalidadeId)
-                .stream()
+        List<Metrica> metricas = metricaRepository.findByPersonalTrainerIdAndModalidadeId(personal.getId(), modalidadeId);
+        Set<UUID> idsComHistorico = buscarIdsComHistorico(metricas);
+        return metricas.stream()
                 .map(metrica -> {
                     Long qtdAlunos = registroMetricaRepository.countAlunosComRegistrosByMetricaId(metrica.getId());
-                    return toResponseDTO(metrica, qtdAlunos);
+                    return toResponseDTO(metrica, qtdAlunos, idsComHistorico.contains(metrica.getId()));
                 })
                 .toList();
     }
@@ -115,12 +127,41 @@ public class MetricaService {
                 || sessaoTreinoRepository.existsByMetricaIdAndStatus(metricaId, StatusSessaoTreino.CONCLUIDA)
                 || auditoriaDesempenhoRepository.existsByMetricaId(metricaId);
 
-        if (dto.tipo() != null && dto.tipo() != metrica.getTipo()) {
+        TipoMetrica tipoAnterior = metrica.getTipo();
+        TipoMetrica tipoFinal = dto.tipo() != null ? dto.tipo() : tipoAnterior;
+        boolean tipoAlterado = !Objects.equals(tipoFinal, tipoAnterior);
+        if (tipoAlterado) {
             if (possuiHistorico) {
                 throw new BusinessException("Não é possível alterar o tipo de uma métrica com histórico de registros. Crie uma nova métrica.");
             }
-            metrica.setTipo(dto.tipo());
+            metrica.setTipo(tipoFinal);
         }
+
+        String unidadeAtual = metrica.getUnidade();
+        String unidadeFinal;
+        if (dto.unidade() != null) {
+            String trimmed = dto.unidade().trim();
+            if (trimmed.isEmpty()) {
+                if (possuiHistorico && unidadeAtual != null) {
+                    throw new BusinessException("Não é possível alterar a unidade de uma métrica com histórico de registros. Crie uma nova métrica.");
+                }
+                if (tipoFinal == TipoMetrica.TEMPO || tipoFinal == TipoMetrica.FREQUENCIA_CARDIACA) {
+                    throw new BusinessException("Este tipo de métrica exige uma unidade de medida.");
+                }
+                unidadeFinal = null;
+            } else {
+                if (possuiHistorico && !Objects.equals(trimmed, unidadeAtual)) {
+                    throw new BusinessException("Não é possível alterar a unidade de uma métrica com histórico de registros. Crie uma nova métrica.");
+                }
+                unidadeFinal = normalizarUnidade(tipoFinal, trimmed, dto.campoStrava(), metrica.getModalidade().getNome());
+            }
+        } else if (tipoAlterado || !CampoStrava.isUnidadeValida(tipoFinal, unidadeAtual)) {
+            String candidato = CampoStrava.isUnidadeValida(tipoFinal, unidadeAtual) ? unidadeAtual : null;
+            unidadeFinal = normalizarUnidade(tipoFinal, candidato, dto.campoStrava(), metrica.getModalidade().getNome());
+        } else {
+            unidadeFinal = unidadeAtual;
+        }
+        metrica.setUnidade(unidadeFinal);
 
         boolean pendenciaAlterada = (dto.obrigatoria() != null && !dto.obrigatoria().equals(metrica.getObrigatoria()))
                 || (dto.quemPreenche() != null && dto.quemPreenche() != metrica.getQuemPreenche());
@@ -133,13 +174,21 @@ public class MetricaService {
             metrica.setQuemPreenche(dto.quemPreenche());
         }
 
-        if (dto.campoStrava() != null) {
-            TipoMetrica tipoFinal = dto.tipo() != null ? dto.tipo() : metrica.getTipo();
-            if (!dto.campoStrava().isCompativelCom(tipoFinal)) {
-                throw new BusinessException("O campo do Strava selecionado não é compatível com o tipo de métrica.");
+        CampoStrava campoStravaFinal;
+        if (dto.campoStrava() == CampoStrava.NENHUM) {
+            campoStravaFinal = null;
+        } else if (dto.campoStrava() != null) {
+            if (!dto.campoStrava().isCompativelCom(tipoFinal, unidadeFinal)) {
+                throw new BusinessException("Campo Strava incompatível com o tipo/unidade da métrica.");
             }
-            metrica.setCampoStrava(dto.campoStrava());
+            campoStravaFinal = dto.campoStrava();
+        } else {
+            campoStravaFinal = metrica.getCampoStrava() == CampoStrava.NENHUM ? null : metrica.getCampoStrava();
+            if (campoStravaFinal != null && !campoStravaFinal.isCompativelCom(tipoFinal, unidadeFinal)) {
+                throw new BusinessException("Campo Strava incompatível com o tipo/unidade da métrica.");
+            }
         }
+        metrica.setCampoStrava(campoStravaFinal);
 
         if (!metrica.getTitulo().equalsIgnoreCase(dto.titulo().trim())) {
             boolean tituloEmUso = metricaRepository.existsByPersonalTrainerIdAndModalidadeIdAndTituloIgnoreCaseAndIdNotAndAtivoTrue(
@@ -159,7 +208,7 @@ public class MetricaService {
         }
 
         Long qtdAlunos = registroMetricaRepository.countAlunosComRegistrosByMetricaId(metricaId);
-        return toResponseDTO(metrica, qtdAlunos);
+        return toResponseDTO(metrica, qtdAlunos, possuiHistorico);
     }
 
     @Transactional
@@ -203,18 +252,95 @@ public class MetricaService {
                 .orElseThrow(() -> new NotFoundException("Personal Trainer não encontrado."));
     }
 
-    private MetricaResponseDTO toResponseDTO(Metrica metrica, Long qtdAlunos) {
+    private Set<UUID> buscarIdsComHistorico(List<Metrica> metricas) {
+        if (metricas == null || metricas.isEmpty()) {
+            return Set.of();
+        }
+        List<UUID> ids = metricas.stream()
+                .map(Metrica::getId)
+                .filter(Objects::nonNull)
+                .toList();
+        if (ids.isEmpty()) {
+            return Set.of();
+        }
+        Set<UUID> comHistorico = new java.util.HashSet<>();
+        Set<UUID> comRegistros = registroMetricaRepository.findMetricaIdsWithRegistros(ids);
+        if (comRegistros != null) {
+            comHistorico.addAll(comRegistros);
+        }
+        Set<UUID> concluidas = sessaoTreinoRepository.findMetricaIdsByStatus(ids, StatusSessaoTreino.CONCLUIDA);
+        if (concluidas != null) {
+            comHistorico.addAll(concluidas);
+        }
+        // B3: mesmo critério de atualizarMetrica (registros, sessões concluídas e auditoria)
+        Set<UUID> auditadas = auditoriaDesempenhoRepository.findMetricaIdsWithAuditoria(ids);
+        if (auditadas != null) {
+            comHistorico.addAll(auditadas);
+        }
+        return comHistorico;
+    }
+
+    private String normalizarUnidade(TipoMetrica tipo, String rawUnidade, CampoStrava campoStrava, String nomeModalidade) {
+        String trimmed = rawUnidade == null ? null : rawUnidade.trim();
+        if (trimmed != null && trimmed.isEmpty()) {
+            trimmed = null;
+        }
+        return switch (tipo) {
+            case TEXTO -> {
+                if (trimmed != null) {
+                    throw new BusinessException("Tipo de métrica TEXTO não aceita unidade de medida.");
+                }
+                yield null;
+            }
+            case FREQUENCIA_CARDIACA -> {
+                if (trimmed == null) {
+                    yield CampoStrava.UNIDADE_BPM;
+                }
+                if (!CampoStrava.UNIDADE_BPM.equals(trimmed)) {
+                    throw new BusinessException("Unidade inválida para métrica de frequência cardíaca. Utilize 'bpm'.");
+                }
+                yield CampoStrava.UNIDADE_BPM;
+            }
+            case TEMPO -> {
+                if (trimmed == null) {
+                    if (campoStrava == CampoStrava.RITMO_MEDIO) {
+                        CampoStrava.TipoEUnidade sugestao = CampoStrava.sugerirTipoEUnidade(campoStrava, nomeModalidade);
+                        yield sugestao != null ? sugestao.unidade() : "min/km";
+                    }
+                    yield "mm:ss";
+                }
+                if (!CampoStrava.isUnidadeValida(TipoMetrica.TEMPO, trimmed)) {
+                    throw new BusinessException("Unidade inválida para métrica de tempo.");
+                }
+                yield trimmed;
+            }
+            case NUMERICO -> {
+                if (trimmed == null) {
+                    yield null;
+                }
+                if (!CampoStrava.isUnidadeValida(TipoMetrica.NUMERICO, trimmed)) {
+                    throw new BusinessException("Unidade inválida para métrica numérica.");
+                }
+                yield trimmed;
+            }
+        };
+    }
+
+    private MetricaResponseDTO toResponseDTO(Metrica metrica, Long qtdAlunos, boolean possuiHistorico) {
+        CampoStrava campoStrava = metrica.getCampoStrava() == CampoStrava.NENHUM ? null : metrica.getCampoStrava();
         return new MetricaResponseDTO(
                 metrica.getId(),
                 metrica.getTitulo(),
                 metrica.getTipo(),
+                metrica.getUnidade(),
                 metrica.getModalidade().getId(),
                 metrica.getModalidade().getNome(),
                 metrica.getObrigatoria(),
                 metrica.getQuemPreenche(),
-                metrica.getCampoStrava(),
+                campoStrava,
                 metrica.getAtivo(),
-                qtdAlunos
+                qtdAlunos,
+                possuiHistorico
         );
     }
 }

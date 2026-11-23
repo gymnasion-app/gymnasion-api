@@ -5,6 +5,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -28,5 +29,19 @@ public record RegistrarExecucaoSessaoRequestDTO(
 
         @Valid
         @Schema(description = "Lista com os resultados das métricas registradas na sessão. Métricas opcionais não preenchidas devem ser omitidas; para o personal trainer é obrigatório informar ao menos um resultado")
-        List<RegistrarResultadoMetricaDTO> resultados
-) {}
+        List<RegistrarResultadoMetricaDTO> resultados,
+
+        @Size(max = 64, message = "O identificador da atividade do Strava deve ter no máximo 64 caracteres.")
+        @Schema(description = "ID da atividade do Strava vinculada à execução, quando importada")
+        String stravaAtividadeId
+) {
+    public RegistrarExecucaoSessaoRequestDTO(
+            LocalDate dataReal,
+            Integer duracao,
+            Integer nivelCansaco,
+            UUID alunoId,
+            List<RegistrarResultadoMetricaDTO> resultados
+    ) {
+        this(dataReal, duracao, nivelCansaco, alunoId, resultados, null);
+    }
+}
